@@ -34,11 +34,9 @@ Productions. **No game files are included:** you need your own copies of the gam
 
 | Game | Edition | Files |
 |---|---|---|
-| inFAMOUS | Europe disc **BCES00220** | a decrypted `.iso` or the disc's folder |
-| inFAMOUS 2 | USA disc **BCUS98125** + its four updates **1.01, 1.02, 1.03, 1.04** | a decrypted `.iso` or the disc's folder, plus the four update `.pkg` files |
+| inFAMOUS | USA disc **BCUS98119** (v1.00 or v2.00) or Europe disc **BCES00220** | a decrypted `.iso` or the disc's folder |
+| inFAMOUS 2 | USA disc **BCUS98125** (v1.00 or v2.00) + its four updates **1.01, 1.02, 1.03, 1.04** | a decrypted `.iso` or the disc's folder, plus the four update `.pkg` files |
 | Festival of Blood | USA PSN **NPUA80657** | the `.pkg` and its `.rap` licence file |
-
-inFAMOUS needs the Europe disc BCES00220 for now; support for the USA disc is planned for an update.
 
 - inFAMOUS 2's updates: the launcher downloads the four official update packages (258 MB) from Sony's PS3
   update server for you (CONTENT page: X shows a notice, X again starts it; the PS5 needs internet; each file is

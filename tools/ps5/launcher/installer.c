@@ -160,7 +160,7 @@ static const char* const kInstDir[INST_NGAMES] = { "if1", "if2", "fob" };
 typedef struct { const char* tid; int game; int update; const char* ver; int tested; const char* what; } inst_known_t;
 static const inst_known_t kInstKnown[] = {
     { "BCES00220", INST_IF1, 0, NULL, 1, "inFAMOUS (Europe, disc)" },
-    { "BCUS98119", INST_IF1, 0, NULL, 0, "inFAMOUS (USA, disc)" },
+    { "BCUS98119", INST_IF1, 0, NULL, 1, "inFAMOUS (USA, disc)" },   /* v01.00 / v02.00: its EBOOT is patched into the Europe one */
     { "BCUS98125", INST_IF2, 0, NULL, 1, "inFAMOUS 2 (USA, disc)" },
     { "BCUS98125", INST_IF2, 1, "01.01", 1, "inFAMOUS 2 update 1.01" },
     { "BCUS98125", INST_IF2, 1, "01.02", 1, "inFAMOUS 2 update 1.02" },
@@ -704,10 +704,11 @@ static int inst_plan(int g, inst_src_t** out, char* need, size_t needn)
     inst_src_t* base = NULL;
     for (int i = 0; i < s_inst_nsrc; i++) {
         const inst_known_t* q = &kInstKnown[s_inst_src[i].known];
-        if (q->game == g && !q->update && (!base || (q->tested && !kInstKnown[base->known].tested))) base = &s_inst_src[i];
+        if (q->game == g && !q->update && (!base || (q->tested && !kInstKnown[base->known].tested)
+                                           || (!strcmp(s_inst_src[i].tid, "BCES00220") && strcmp(base->tid, "BCES00220")))) base = &s_inst_src[i];   /* inFAMOUS: the Europe disc first */
     }
     if (!base) {
-        snprintf(need, needn, g == INST_IF1 ? "the inFAMOUS disc (BCES00220, Europe: a decrypted ISO or its folder)"
+        snprintf(need, needn, g == INST_IF1 ? "the inFAMOUS disc (BCES00220 Europe or BCUS98119 USA: a decrypted ISO or its folder)"
                             : g == INST_IF2 ? "the inFAMOUS 2 disc (BCUS98125, USA: a decrypted ISO or its folder)"
                             : "the Festival of Blood package (NPUA80657, USA PSN .pkg) and its licence file (the .rap, next to the .pkg)");
         return 0;
@@ -760,6 +761,8 @@ typedef struct {
     char rap[512];                  /* FoB: the .rap licence file */
 } inst_job_t;
 static inst_job_t s_inst;
+/* inFAMOUS 1 from the USA disc (BCUS98119): installed in the Europe layout (EBOOT.elf patched, TITLE_ID BCES00220). */
+static int inst_if1_usa(const inst_job_t* J) { return J->game == INST_IF1 && J->nsrc > 0 && !strcmp(J->src[0]->tid, "BCUS98119"); }
 
 static int inst_mkdirs(const char* path)   /* mkdir -p of path's directories (not the last part) */
 {
@@ -854,6 +857,8 @@ typedef struct { int npdrm; uint16_t rev; uint8_t erk[32], riv[16]; } inst_selfk
 static const inst_selfkey_t kInstSelfKeys[] = {
     { 0, 0x0001, { 0x79,0x48,0x18,0x39,0xc4,0x06,0xa6,0x32,0xbd,0xb4,0xac,0x09,0x3d,0x73,0xd9,0x9a,0xe1,0x58,0x7f,0x24,0xce,0x7e,0x69,0x19,0x2c,0x1c,0xd0,0x01,0x02,0x74,0xa8,0xab },
                  { 0x6f,0x0f,0x25,0xe1,0xc8,0xc4,0xb7,0xae,0x70,0xdf,0x96,0x8b,0x04,0x52,0x1d,0xda } },   /* APP 0x0001: inFAMOUS disc */
+    { 0, 0x001C, { 0xcf,0xf0,0x25,0x37,0x5b,0xa0,0x07,0x92,0x26,0xbe,0x01,0xf4,0xa3,0x1f,0x34,0x6d,0x79,0xf6,0x2c,0xfb,0x64,0x3c,0xa9,0x10,0xe1,0x6c,0xf6,0x0b,0xd9,0x09,0x27,0x52 },
+                 { 0xfd,0x40,0x66,0x4e,0x2e,0xbb,0xa0,0x1b,0xf3,0x59,0xb0,0xdc,0xdf,0x54,0x3d,0xa4 } },   /* APP 0x001C: inFAMOUS USA disc v02.00 */
     { 1, 0x000A, { 0x03,0xc2,0x1a,0xd7,0x8f,0xbb,0x6a,0x3d,0x42,0x5e,0x9a,0xab,0x12,0x98,0xf9,0xfd,0x70,0xe2,0x9f,0xd4,0xe6,0xe3,0xa3,0xc1,0x51,0x20,0x5d,0xa5,0x0c,0x41,0x3d,0xe4 },
                  { 0x0a,0x99,0xd4,0xd4,0xf8,0x30,0x1a,0x88,0x05,0x2d,0x71,0x4a,0xd2,0xfb,0x56,0x5e } },   /* NPDRM 0x000A: Festival of Blood */
     { 1, 0x0010, { 0x4b,0x3c,0xd1,0x0f,0x6a,0x6a,0xa7,0xd9,0x9f,0x9b,0x3a,0x66,0x0c,0x35,0xad,0xe0,0x8e,0xf0,0x1c,0x2c,0x33,0x6b,0x9e,0x46,0xd1,0xbb,0x56,0x78,0xb4,0x26,0x1a,0x61 },
@@ -872,6 +877,55 @@ static const uint8_t kInstEbootSha[INST_NGAMES][32] = {
     { 0x55,0xa5,0x80,0x11,0xc8,0x87,0xca,0x19,0xe9,0x56,0x67,0xe6,0xd4,0x1f,0xcb,0xf7,0x53,0x03,0x90,0x17,0x75,0xf7,0x6b,0x58,0x18,0xc3,0x7b,0x6a,0x5c,0x65,0x5d,0x51 } };
 
 static uint16_t be16(const uint8_t* p) { return (uint16_t)(p[0] << 8 | p[1]); }
+/* The USA disc (BCUS98119 v01.00 and v02.00: the same ELF) -> the Europe EBOOT.elf above: a UDP1 patch, applied in memory. */
+static const uint8_t kIf1UsaElfSha[32] = { 0x4f,0x2d,0xb3,0xfb,0x7c,0x76,0xfb,0xb4,0xf8,0x0c,0xbc,0x84,0x45,0xcf,0x0e,0xa1,0x57,0x0a,0x66,0x49,0x96,0xa7,0x78,0x7e,0x69,0x0e,0xfc,0xc1,0xa3,0x9b,0xef,0xb4 };
+#include "if1_usa_eboot.inc"
+/* UDP1 (big-endian; work/agent_delta1/udelta_dec.c): "UDP1", 'F' u16 n name u16 n src u64 size u32 crc32 sha256[32],
+ * records 'C' u64 src_off u32 len | 'D' u32 len bytes, 'E', 'Z'. One file. *out = the result (malloc'd), checked against
+ * its size, CRC32 and sha256; returns NULL, or why not. */
+static const char* inst_udp1(const uint8_t* src, size_t srcn, const uint8_t* p, size_t pn, uint8_t** out, size_t* outn)
+{
+    *out = NULL; *outn = 0;
+    size_t i = 4;
+#define UDP_NEED(k) do { if ((k) > pn - i) { free(o); return "a damaged patch"; } } while (0)
+    uint8_t* o = NULL;
+    if (pn < 5 || memcmp(p, "UDP1", 4) || p[i++] != 'F') return "a damaged patch";
+    for (int k = 0; k < 2; k++) { UDP_NEED(2); const size_t l = be16(p + i); UDP_NEED(2 + l); i += 2 + l; }   /* name, source name */
+    UDP_NEED(8 + 4 + 32);
+    const uint64_t size = be64(p + i); const uint32_t crc_want = be32(p + i + 8); const uint8_t* sha_want = p + i + 12;
+    i += 8 + 4 + 32;
+    if (size > (256u << 20)) return "a damaged patch";
+    o = malloc((size_t)size ? (size_t)size : 1);
+    if (!o) return "out of memory";
+    uint64_t w = 0;
+    for (;;) {
+        UDP_NEED(1);
+        const uint8_t t = p[i++];
+        if (t == 'E') break;
+        if (t == 'C') {
+            UDP_NEED(12);
+            const uint64_t off = be64(p + i); const uint32_t len = be32(p + i + 8); i += 12;
+            if (off > srcn || len > srcn - off || len > size - w) { free(o); return "a patch that doesn't fit this EBOOT"; }
+            memcpy(o + w, src + off, len); w += len;
+        } else if (t == 'D') {
+            UDP_NEED(4);
+            const uint32_t len = be32(p + i); i += 4;
+            UDP_NEED(len);
+            if (len > size - w) { free(o); return "a damaged patch"; }
+            memcpy(o + w, p + i, len); i += len; w += len;
+        } else { free(o); return "a damaged patch"; }
+    }
+    UDP_NEED(1);
+    if (p[i] != 'Z' || w != size) { free(o); return "a damaged patch"; }
+#undef UDP_NEED
+    uint32_t c = 0xFFFFFFFFu;
+    for (uint64_t j = 0; j < size; j++) { c ^= o[j]; for (int b = 0; b < 8; b++) c = c & 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1; }
+    uint8_t sha[32]; inst_sha256(o, (size_t)size, sha);
+    if (~c != crc_want || memcmp(sha, sha_want, 32)) { free(o); return "a patch result with the wrong checksum"; }
+    *out = o; *outn = (size_t)size;
+    return NULL;
+}
+
 static void inst_rap_to_rif(const uint8_t rap[16], uint8_t key[16])   /* RPCS3 key_vault.cpp rap_to_rif */
 {
     inst_aesd_t a; static const uint8_t z[16];
@@ -1002,6 +1056,14 @@ static int inst_eboot(const char* part)
     free(d);
     if (why) { char m[256]; snprintf(m, sizeof m, "%s: %s", s->name, why); return inst_fail("Can't use the EBOOT.BIN of %s", m); }
     uint8_t sha[32]; inst_sha256(elf, n, sha);
+    if (inst_if1_usa(J) && !memcmp(sha, kIf1UsaElfSha, 32)) {   /* the USA executable -> the Europe one the build needs */
+        uint8_t* eu; size_t eun;
+        why = inst_udp1(elf, n, kIf1UsaEbootPatch, sizeof kIf1UsaEbootPatch, &eu, &eun);
+        free(elf);
+        if (why) return inst_fail("Couldn't turn the USA EBOOT.BIN of %s into the Europe one", s->name);   /* (why: out of memory, or a damaged build) */
+        elf = eu; n = eun;
+        inst_sha256(elf, n, sha);
+    }
     if (memcmp(sha, kInstEbootSha[J->game], 32)) {
         free(elf);
         return inst_fail(J->game == INST_FOB ? "The EBOOT.BIN of %s isn't the expected one (another edition, or the .rap of another game)"
@@ -1037,6 +1099,7 @@ static void* inst_main(void* arg)
         for (int k = 0; k < J->src[i]->n; k++) {
             const char* rel = J->src[i]->e[k].rel;
             if (inst_skip(rel)) continue;
+            if (inst_if1_usa(J) && (!strncmp(rel, "LICDIR/", 7) || !strncmp(rel, "PKGDIR/", 7))) continue;   /* USA v02.00's disc licence + manual package: not in the Europe layout */
             int j = 0;
             for (; j < np; j++) if (!strcmp(pk[j].s->e[pk[j].i].rel, rel)) break;
             pk[j].s = J->src[i]; pk[j].i = k;
@@ -1061,6 +1124,16 @@ static void* inst_main(void* arg)
         if (inst_copy_ent(pk[j].s, e, p)) { free(pk); return NULL; }
     }
     free(pk);
+    if (inst_if1_usa(J)) {   /* the title ID the build, its BCES00220 first-boot folder and the saves use; the rest stays the disc's */
+        snprintf(p, sizeof p, "%s/PARAM.SFO", part);
+        FILE* f = fopen(p, "rb");
+        uint8_t sfo[4096]; size_t n = f ? fread(sfo, 1, sizeof sfo, f) : 0;
+        if (f) fclose(f);
+        if (!n || inst_sfo_set(sfo, n, "TITLE_ID", "BCES00220") || inst_write(p, sfo, n)) {
+            if (s_inst.state != 3) inst_fail("Couldn't update %s", p);
+            return NULL;
+        }
+    }
     /* inFAMOUS 2: PARAM.SFO as the PSN release has it (the build's NPUA80638 1.03), and its game-data
      * folder: PARAM.SFO + the updates' archives. FoB: PARAM.SFO + dlc. */
     const char* tid2 = g == INST_IF2 ? "NPUA80638" : g == INST_FOB ? "NPUA80657" : NULL;
