@@ -1,0 +1,214 @@
+#version 450
+// vk look: optional ReShade-style finishing pass after FSR (PS3_LOOK: 0 original, 1 remaster, 2 comic, 3 cel,
+// 4 borderlands, 5 ink noir, 6 soft ink, 7 toon light, 8 painterly, 9 vintage print, 10 sketch, 11 hdr pop).
+// Reads the sharpened full-resolution frame, writes the final one. Same layout/push constants as EASU/RCAS:
+// pc.con0.x = mode, pc.con0.y = strength (0..1), pc.out_w/out_h = size.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D src;
+layout(binding = 1, rgba8) uniform writeonly image2D dst;
+layout(push_constant) uniform PC { ivec4 dims; vec4 con0; float sharp; } pc;
+
+ivec2 S; float SC;   // SC: output height / 720, so radii keep their on-screen size at 1080p/4K
+vec3 at(ivec2 p) { return texelFetch(src, clamp(p, ivec2(0), S - 1), 0).rgb; }
+vec3 ats(ivec2 p, vec2 o) { return at(p + ivec2(round(o * SC))); }
+float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+
+vec3 vibrance(vec3 c, float amt) {
+    float l = luma(c), mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b));
+    float sat = mx - mn;
+    return mix(vec3(l), c, 1.0 + amt * (1.0 - sat));
+}
+
+vec3 remaster(ivec2 p, vec3 c, float k) {
+    // clarity: local contrast against a wide (radius ~6 px) luma blur, applied to luma only
+    float bl = 0.0;
+    const ivec2 o[8] = ivec2[8](ivec2(6,0), ivec2(-6,0), ivec2(0,6), ivec2(0,-6), ivec2(4,4), ivec2(-4,4), ivec2(4,-4), ivec2(-4,-4));
+    for (int i = 0; i < 8; i++) bl += luma(ats(p, vec2(o[i])));
+    bl *= 0.125;
+    float l = luma(c);
+    float detail = clamp(l - bl, -0.15, 0.15);
+    c += detail * 0.55 * k;
+    // filmic contrast: deeper blacks, gentle highlight roll-off
+    c = max(c, 0.0);
+    c = pow(c, vec3(1.0 + 0.10 * k));
+    vec3 s = c * c * (3.0 - 2.0 * c);
+    c = mix(c, s, 0.28 * k);
+    // colour: vibrance (protects already-saturated colours) + a touch of saturation
+    c = vibrance(c, 0.45 * k);
+    c = mix(vec3(luma(c)), c, 1.0 + 0.08 * k);
+    return c;
+}
+
+vec3 comic(ivec2 p, vec3 c, float k) {
+    // flatten texture noise first: 3x3 colour-weighted mean (edge preserving)
+    vec3 acc = vec3(0.0); float wsum = 0.0;
+    for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+        vec3 q = ats(p, vec2(x, y) * 2.0);
+        float w = exp(-dot(q - c, q - c) * 40.0);
+        acc += q * w; wsum += w;
+    }
+    vec3 f = acc / wsum;
+    // ink: Sobel on luma at 1.5 px scale, plus colour edges
+    float tl = luma(ats(p, vec2(-1,-1))), t = luma(ats(p, vec2(0,-1))), tr = luma(ats(p, vec2(1,-1)));
+    float l_ = luma(ats(p, vec2(-1, 0))),                                  r = luma(ats(p, vec2(1, 0)));
+    float bl = luma(ats(p, vec2(-1, 1))), b = luma(ats(p, vec2(0, 1))), br = luma(ats(p, vec2(1, 1)));
+    float gx = (tr + 2.0 * r + br) - (tl + 2.0 * l_ + bl);
+    float gy = (bl + 2.0 * b + br) - (tl + 2.0 * t + tr);
+    float e = sqrt(gx * gx + gy * gy);
+    vec3 cd = abs(ats(p, vec2(2, 0)) - ats(p, vec2(-2, 0))) + abs(ats(p, vec2(0, 2)) - ats(p, vec2(0, -2)));
+    e = max(e, dot(cd, vec3(0.33)) * 0.8);
+    float ink = smoothstep(0.22, 0.48, e);
+    float glow = max(max(ats(p, vec2(2,0)).b, ats(p, vec2(-2,0)).b), max(luma(c), max(ats(p, vec2(0,2)).b, ats(p, vec2(0,-2)).b)));
+    ink *= 1.0 - smoothstep(0.55, 0.85, glow);       // no ink on glowing things (lightning, fire, lights)
+    // cel bands on luma, hue kept; smooth band edges so it does not crawl when the camera moves
+    float L = max(luma(f), 1e-4);
+    const float bands = 5.0;
+    float x = L * bands, fl = floor(x), fr = x - fl;
+    float Lq = (fl + smoothstep(0.35, 0.65, fr)) / bands;
+    Lq = mix(Lq, L, 0.35);
+    vec3 cel = f * (Lq / L);
+    cel = mix(vec3(luma(cel)), cel, 1.65);           // punchy comic colour
+    cel = clamp(cel, 0.0, 1.0);
+    // halftone dots in the shadows (45-degree grid, ~7 px)
+    vec2 g = mat2(0.7071, -0.7071, 0.7071, 0.7071) * vec2(p) / (7.0 * SC);
+    float d = length(fract(g) - 0.5);
+    float shade = 1.0 - smoothstep(0.08, 0.30, Lq);  // 1 in deep shadow only
+    float dot_ = 1.0 - smoothstep(0.30 * shade, 0.30 * shade + 0.08, d);
+    cel *= 1.0 - 0.35 * dot_ * shade;
+    cel = mix(cel, max(cel, c), smoothstep(0.6, 0.9, luma(c)));   // keep highlights bright
+    vec3 inkc = vec3(0.04, 0.03, 0.05);
+    return mix(c, mix(cel, inkc, ink), k);
+}
+
+// ---- shared pieces for the styles below ----
+float edge(ivec2 p, float r) {             // Sobel on luma at radius r (output-scaled)
+    float tl = luma(ats(p, vec2(-r,-r))), t = luma(ats(p, vec2(0,-r))), tr = luma(ats(p, vec2(r,-r)));
+    float l_ = luma(ats(p, vec2(-r, 0))),                               rr = luma(ats(p, vec2(r, 0)));
+    float bl = luma(ats(p, vec2(-r, r))), b = luma(ats(p, vec2(0, r))), br = luma(ats(p, vec2(r, r)));
+    float gx = (tr + 2.0 * rr + br) - (tl + 2.0 * l_ + bl), gy = (bl + 2.0 * b + br) - (tl + 2.0 * t + tr);
+    return sqrt(gx * gx + gy * gy);
+}
+float glowmask(ivec2 p, vec3 c) {          // 1 on glowing things (lightning, fire, lights): no ink there
+    float g = max(luma(c), max(max(ats(p, vec2(2,0)).b, ats(p, vec2(-2,0)).b), max(ats(p, vec2(0,2)).b, ats(p, vec2(0,-2)).b)));
+    return smoothstep(0.55, 0.85, g);
+}
+float inkline(ivec2 p, vec3 c, float t0, float t1, float thick) {
+    float e = edge(p, 1.0);
+    if (thick > 1.0) e = max(e, max(max(edge(p + ivec2(round(vec2(1,0) * SC)), 1.0), edge(p - ivec2(round(vec2(1,0) * SC)), 1.0)),
+                                    max(edge(p + ivec2(round(vec2(0,1) * SC)), 1.0), edge(p - ivec2(round(vec2(0,1) * SC)), 1.0))));
+    return smoothstep(t0, t1, e) * (1.0 - glowmask(p, c));
+}
+vec3 bilateral(ivec2 p, vec3 c, float r) {
+    vec3 acc = vec3(0.0); float ws = 0.0;
+    for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+        vec3 q = ats(p, vec2(x, y) * r); float w = exp(-dot(q - c, q - c) * 40.0); acc += q * w; ws += w;
+    }
+    return acc / ws;
+}
+float bandq(float L, float bands) { float x = L * bands, fl = floor(x); return (fl + smoothstep(0.4, 0.6, x - fl)) / bands; }
+vec3 satc(vec3 c, float s) { return mix(vec3(luma(c)), c, s); }
+vec3 contrast(vec3 c, float k) { return (c - 0.5) * k + 0.5; }
+float shadow(float lq) { return 1.0 - smoothstep(0.10, 0.35, lq); }
+const vec3 INK = vec3(0.035, 0.03, 0.04);
+
+vec3 cel(ivec2 p, vec3 c) {               // 3: clean cel shading, thin ink, no dots
+    vec3 f = bilateral(p, c, 2.0); float L = max(luma(f), 1e-4), q = bandq(L, 3.0);
+    vec3 r = clamp(satc(f * (mix(q, L, 0.2) / L), 1.35), 0.0, 1.0);
+    r = mix(r, max(r, c), smoothstep(0.6, 0.9, luma(c)));
+    return mix(r, INK, inkline(p, c, 0.25, 0.45, 1.0));
+}
+vec3 borderlands(ivec2 p, vec3 c) {       // 4: thick ink outlines, flat colour, hatched shadows
+    vec3 f = bilateral(p, c, 2.0); float L = max(luma(f), 1e-4), q = bandq(L, 4.0);
+    vec3 r = clamp(satc(f * (mix(q, L, 0.25) / L), 1.15), 0.0, 1.0);
+    float sh = shadow(q); vec2 fp = vec2(p) / SC;
+    if (mod(fp.x + fp.y, 5.0) < 1.4) r *= 1.0 - 0.5 * sh;
+    if (sh > 0.6 && mod(fp.x - fp.y, 5.0) < 1.4) r *= 1.0 - 0.45 * sh;
+    r = mix(r, max(r, c), smoothstep(0.65, 0.9, luma(c)));
+    return mix(r, INK, 0.9 * inkline(p, c, 0.26, 0.48, 2.0));
+}
+vec3 inknoir(ivec2 p, vec3 c) {           // 5: graphic-novel black and white; only vivid colour survives
+    vec3 f = bilateral(p, c, 2.0); float L = luma(f);
+    float g = L > 0.32 ? 0.93 : (L > 0.11 ? 0.55 : 0.1);
+    float vivid = smoothstep(0.30, 0.45, max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b))) * smoothstep(0.5, 0.7, max(c.r, max(c.g, c.b)));
+    vec3 r = mix(vec3(g * 0.97, g * 0.94, g * 0.90), satc(c, 1.5), vivid);
+    return mix(r, INK, 0.9 * inkline(p, c, 0.28, 0.5, 2.0));
+}
+vec3 softink(ivec2 p, vec3 c) {           // 6: the picture as it is, punchier, thin ink on the big edges
+    vec3 r = clamp(contrast(satc(c, 1.25), 1.1), 0.0, 1.0);
+    return mix(r, INK, 0.75 * inkline(p, c, 0.28, 0.5, 1.0));
+}
+vec3 toonlight(ivec2 p, vec3 c) {         // 7: half the real shading, half two-tone light
+    vec3 f = bilateral(p, c, 2.0); float L = max(luma(f), 1e-4);
+    float tone = L > 0.47 ? 0.82 : (L > 0.2 ? 0.47 : 0.16);
+    vec3 toned = clamp(satc(f, 1.3) * (tone / L) * 0.95, 0.0, 1.0);
+    vec3 r = mix(c, toned, 0.55);
+    return mix(r, INK, 0.85 * inkline(p, c, 0.3, 0.55, 1.0));
+}
+vec3 painterly(ivec2 p) {                 // 8: oil paint (Kuwahara: the calmest of four neighbourhoods)
+    vec3 best = vec3(0.0); float bv = 1e9;
+    for (int k = 0; k < 4; k++) {
+        vec2 dir = vec2((k & 1) == 0 ? -1.0 : 1.0, (k & 2) == 0 ? -1.0 : 1.0);
+        vec3 m = vec3(0.0), m2 = vec3(0.0);
+        for (int y = 0; y <= 2; y++) for (int x = 0; x <= 2; x++) { vec3 q = ats(p, vec2(x, y) * dir * 1.5); m += q; m2 += q * q; }
+        m /= 9.0; m2 /= 9.0; float v = dot(m2 - m * m, vec3(1.0));
+        if (v < bv) { bv = v; best = m; }
+    }
+    vec3 r = clamp(contrast(satc(best, 1.3), 1.08), 0.0, 1.0);
+    return r * vec3(1.05, 1.0, 0.93);
+}
+vec3 vintage(ivec2 p, vec3 c) {           // 9: printed comic page: offset inks, paper, fine dots in the shadows
+    vec3 r = vec3(ats(p, vec2(1, 0)).r, c.g, ats(p, vec2(-1, 1)).b);
+    r = clamp(contrast(satc(r, 1.15), 1.05), 0.0, 1.0) * vec3(0.957, 0.918, 0.839);
+    float L = luma(c);
+    if (L < 0.35) {
+        vec2 g = mat2(0.7071, -0.7071, 0.7071, 0.7071) * vec2(p) / (3.0 * SC);
+        float d = length(fract(g) - 0.5);
+        r *= 1.0 - 0.3 * (1.0 - smoothstep(0.35 * (1.0 - L / 0.35) - 0.05, 0.35 * (1.0 - L / 0.35) + 0.05, d));
+    }
+    return mix(r, INK, 0.7 * inkline(p, c, 0.3, 0.55, 1.0));
+}
+vec3 sketch(ivec2 p, vec3 c) {            // 10: pencil over a light wash of the colours
+    float g = luma(c), bl = 0.0;
+    for (int i = 0; i < 8; i++) { float a = float(i) * 0.785398; bl += luma(ats(p, vec2(cos(a), sin(a)) * 4.0)); }
+    bl /= 8.0;
+    float pencil = clamp(g / max(bl, 0.02), 0.0, 1.0);
+    vec3 wash = satc(c, 0.8);
+    return mix(vec3(pencil) * wash, wash, 0.25);
+}
+vec3 hdrpop(ivec2 p, vec3 c) {            // 11: local contrast, deep blacks, glow on the bright bits
+    float bl = 0.0; vec3 gl = vec3(0.0);
+    for (int i = 0; i < 8; i++) {
+        float a = float(i) * 0.785398; vec2 d = vec2(cos(a), sin(a));
+        bl += luma(ats(p, d * 12.0)); gl += max(ats(p, d * 6.0) - 0.67, 0.0);
+    }
+    bl /= 8.0; gl = gl / 8.0 * 3.0;
+    vec3 r = c + clamp(luma(c) - bl, -0.25, 0.25) * 0.9;
+    r = clamp(contrast(satc(r, 1.3), 1.15), 0.0, 1.0);
+    return r + gl;
+}
+
+void main() {
+    S = pc.dims.zw; SC = max(1.0, float(S.y) / 720.0);
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= S.x || p.y >= S.y) return;
+    vec3 c = at(p);
+    int mode = int(pc.con0.x + 0.5);
+    float k = clamp(pc.con0.y, 0.0, 1.0);
+    vec3 o = c;
+    if (mode == 1) c = remaster(p, c, k);
+    else if (mode == 2) c = comic(p, c, k);
+    else if (mode == 3) c = cel(p, c);
+    else if (mode == 4) c = borderlands(p, c);
+    else if (mode == 5) c = inknoir(p, c);
+    else if (mode == 6) c = softink(p, c);
+    else if (mode == 7) c = toonlight(p, c);
+    else if (mode == 8) c = painterly(p);
+    else if (mode == 9) c = vintage(p, c);
+    else if (mode == 10) c = sketch(p, c);
+    else if (mode == 11) c = hdrpop(p, c);
+    if (mode >= 3) c = mix(o, c, k);
+    if (pc.con0.z > 0.0 && pc.con0.z != 1.0) c = pow(max(c, vec3(0.0)), vec3(pc.con0.z));   // vk gamma: PS3_VK_GAMMA (if1 brightness)
+    c += (hash(vec2(p)) - 0.5) / 255.0;              // de-band dither
+    imageStore(dst, p, vec4(clamp(c, 0.0, 1.0), 1.0));
+}

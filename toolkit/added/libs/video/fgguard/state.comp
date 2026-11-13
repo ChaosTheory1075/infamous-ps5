@@ -1,0 +1,26 @@
+#version 450
+// fg guard, pass 2 (one invocation): this pair's decision. Above hi (a fast camera swing, a cut) the generated
+// frame is not shown; it comes back once the difference has been below lo for hold + 1 pairs (no on/off flicker).
+// Counts the held pairs and the difference (x 10000) for the log, clears the sums for the next pair.
+layout(local_size_x = 1) in;
+layout(set = 0, binding = 2) buffer B { uint sum; uint lum; uint count; uint state; uint hold; uint skipped; uint rel_max; uint rel_sum; } buf;
+layout(push_constant) uniform PC { ivec2 size; float hi; float lo; int hold; } pc;
+void main()
+{
+    float n = float(((pc.size.x + 3) / 4) * ((pc.size.y + 3) / 4));
+    float rel = float(buf.sum) / max(float(buf.lum), 0.02 * 255.0 * n);   // a near-black pair is "no difference"
+    uint s = buf.state;
+    if (rel > pc.hi) { s = 1u; buf.hold = uint(pc.hold); }
+    else if (s != 0u && rel < pc.lo) {
+        if (buf.hold > 0u) buf.hold -= 1u;
+        else s = 0u;
+    }
+    buf.state = s;
+    buf.skipped += s;
+    buf.count += 1u;
+    uint m = uint(min(rel, 1.0) * 10000.0);
+    buf.rel_max = max(buf.rel_max, m);
+    buf.rel_sum += m;
+    buf.sum = 0u;
+    buf.lum = 0u;
+}

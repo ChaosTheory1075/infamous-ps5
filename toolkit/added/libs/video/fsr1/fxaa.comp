@@ -1,0 +1,43 @@
+#version 450
+// vk aa: FXAA (console-quality variant of Timothy Lottes' FXAA 3.11 idea, written from the algorithm:
+// local contrast test, edge direction from luma gradients, a short directional blur, reject if it leaves
+// the local luma range) on the guest-size frame, before EASU. Same layout/push constants as EASU/RCAS:
+// pc.dims.xy = size.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D src;   // linear sampler
+layout(binding = 1, rgba8) uniform writeonly image2D dst;
+layout(push_constant) uniform PC { ivec4 dims; vec4 con0; float sharp; } pc;
+
+float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 S = pc.dims.xy;
+    if (p.x >= S.x || p.y >= S.y) return;
+    vec2 rcp = 1.0 / vec2(S);
+    vec2 uv = (vec2(p) + 0.5) * rcp;
+    vec3 rgbM = textureLod(src, uv, 0.0).rgb;
+    vec3 rgbNW = textureLod(src, uv + vec2(-1.0, -1.0) * rcp, 0.0).rgb;
+    vec3 rgbNE = textureLod(src, uv + vec2( 1.0, -1.0) * rcp, 0.0).rgb;
+    vec3 rgbSW = textureLod(src, uv + vec2(-1.0,  1.0) * rcp, 0.0).rgb;
+    vec3 rgbSE = textureLod(src, uv + vec2( 1.0,  1.0) * rcp, 0.0).rgb;
+    float lM = luma(rgbM), lNW = luma(rgbNW), lNE = luma(rgbNE), lSW = luma(rgbSW), lSE = luma(rgbSE);
+    float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
+    float lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
+    float range = lMax - lMin;
+    if (range < max(0.0312, lMax * 0.125)) {          // flat area: untouched (keeps texture detail)
+        imageStore(dst, p, vec4(rgbM, 1.0));
+        return;
+    }
+    vec2 dir = vec2(-((lNW + lNE) - (lSW + lSE)), ((lNW + lSW) - (lNE + lSE)));
+    float dirReduce = max((lNW + lNE + lSW + lSE) * 0.25 * (1.0 / 8.0), 1.0 / 128.0);
+    float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
+    dir = clamp(dir * rcpDirMin, vec2(-8.0), vec2(8.0)) * rcp;
+    vec3 rgbA = 0.5 * (textureLod(src, uv + dir * (1.0 / 3.0 - 0.5), 0.0).rgb +
+                       textureLod(src, uv + dir * (2.0 / 3.0 - 0.5), 0.0).rgb);
+    vec3 rgbB = rgbA * 0.5 + 0.25 * (textureLod(src, uv + dir * -0.5, 0.0).rgb +
+                                     textureLod(src, uv + dir *  0.5, 0.0).rgb);
+    float lB = luma(rgbB);
+    vec3 outc = (lB < lMin || lB > lMax) ? rgbA : rgbB;
+    imageStore(dst, p, vec4(outc, 1.0));
+}

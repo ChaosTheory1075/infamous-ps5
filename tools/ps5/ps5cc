@@ -1,0 +1,15 @@
+#!/bin/sh
+if [ -f "$(dirname "${BASH_SOURCE[0]:-$0}")/../local.env" ]; then . "$(dirname "${BASH_SOURCE[0]:-$0}")/../local.env"; fi   # local paths / PS5_IP (tools/local.env.example)
+# PS5 compiler for CMake: the toolchain's prospero-clang18 target wrapper, plus the PS5 compat header.
+# -ffp-contract=off everywhere: the target has FMA, and clang's default (contract within a statement)
+# fused the lifted SPU code's separate multiplies and adds -- one rounding where the SPU does two.
+# The PPU code and the runtime already had it; the lifted SPU sources did not.
+# Native TLS (PS5_EMUTLS=1 goes back to the wrapper's -femulated-tls): every thread-local access was
+# a call to __emutls_get_address and pthread_getspecific in libkernel -- the recompiled code reads
+# g_trampoline_fn after every guest call (~37,000 call sites). The eboot keeps a real PT_TLS
+# (sce_module_writer), so local-exec %fs accesses work.
+TRI=$HOME/mp3build/tri
+TLS="-fno-emulated-tls -ftls-model=local-exec"
+[ "$PS5_EMUTLS" = 1 ] && TLS=""
+LLVM_CONFIG=${LLVM_CONFIG:-/usr/bin/llvm-config-18} PS5_CLANG=${PS5_CLANG:-/usr/bin/clang-18} PS5_PAYLOAD_SDK=$TRI/.deps/native/ps5-payload-sdk exec sh $TRI/tooling/prospero-clang18 \
+    -include $HOME/if2/ps5/compat/ps5_compat.h "$@" -ffp-contract=off $TLS -fomit-frame-pointer   # 2026-11-10: the PS5 target defaults to -mframe-pointer=non-leaf (rbp lost in every lifted fn); BC builds have none

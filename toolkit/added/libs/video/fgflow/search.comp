@@ -1,0 +1,69 @@
+#version 450
+// fg flow, pass 1: block matching. One workgroup per 16x16 block of the next frame: where was it in the previous
+// frame? Coarse: displacements -48..48 px in steps of 4 on a 32x32 window (8x8 samples); fine: +-3 px around the
+// best on the 16x16 block (8x8 samples). A small cost per pixel of displacement, and "no motion" wins when it is
+// nearly as good (still areas, the HUD). Out (block resolution, rgba32f): the displacement d in pixels, prev = next + d.
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0) uniform sampler2D prev_c;
+layout(set = 0, binding = 1) uniform sampler2D next_c;
+layout(set = 0, binding = 2, rgba32f) uniform writeonly image2D raw;
+layout(push_constant) uniform PC { ivec2 size; ivec2 blocks; float lambda; float zero_bias; } pc;
+shared float s_cost[64];
+shared int s_idx[64];
+shared float s_lum[64];
+float L(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+float P(ivec2 p) { return L(texelFetch(prev_c, clamp(p, ivec2(0), pc.size - 1), 0).rgb); }
+float N(ivec2 p) { return L(texelFetch(next_c, clamp(p, ivec2(0), pc.size - 1), 0).rgb); }
+void reduce(uint li)
+{
+    barrier();
+    for (uint s = 32u; s > 0u; s >>= 1) {
+        if (li < s && s_cost[li + s] < s_cost[li]) { s_cost[li] = s_cost[li + s]; s_idx[li] = s_idx[li + s]; }
+        barrier();
+    }
+}
+void main()
+{
+    const uint li = gl_LocalInvocationIndex;
+    const ivec2 blk = ivec2(gl_WorkGroupID.xy);
+    const ivec2 c = blk * 16 + 8;                       // block centre
+    // the next frame's samples: coarse window (32x32 at stride 4) kept in shared memory
+    const ivec2 so = ivec2(li % 8u, li / 8u);
+    s_lum[li] = N(c - 16 + so * 4 + 2);
+    barrier();
+    // coarse: 625 candidates, ~10 a thread
+    float best = 1e30; int bi = 0;
+    for (int k = int(li); k < 625; k += 64) {
+        const ivec2 d = ivec2(k % 25 - 12, k / 25 - 12) * 4;
+        float sad = 0.0;
+        for (int s = 0; s < 64; s++) {
+            const ivec2 o = ivec2(s % 8, s / 8) * 4 + 2 - 16;
+            sad += abs(P(c + o + d) - s_lum[s]);
+        }
+        sad += pc.lambda * 64.0 * float(abs(d.x) + abs(d.y));
+        if (d == ivec2(0)) sad *= pc.zero_bias;
+        if (sad < best) { best = sad; bi = k; }
+    }
+    s_cost[li] = best; s_idx[li] = bi;
+    reduce(li);
+    const ivec2 dc = ivec2(s_idx[0] % 25 - 12, s_idx[0] / 25 - 12) * 4;
+    barrier();
+    // fine: 49 candidates around dc on the block itself (8x8 samples at stride 2)
+    s_lum[li] = N(blk * 16 + so * 2 + 1);
+    barrier();
+    best = 1e30; bi = 24;
+    if (li < 49u) {
+        const ivec2 d = dc + ivec2(int(li) % 7 - 3, int(li) / 7 - 3);
+        float sad = 0.0;
+        for (int s = 0; s < 64; s++) sad += abs(P(blk * 16 + ivec2(s % 8, s / 8) * 2 + 1 + d) - s_lum[s]);
+        sad += pc.lambda * 64.0 * float(abs(d.x) + abs(d.y));
+        if (d == ivec2(0)) sad *= pc.zero_bias;
+        best = sad; bi = int(li);
+    }
+    s_cost[li] = best; s_idx[li] = bi;
+    reduce(li);
+    if (li == 0u) {
+        const ivec2 d = dc + ivec2(s_idx[0] % 7 - 3, s_idx[0] / 7 - 3);
+        imageStore(raw, blk, vec4(vec2(d), 0.0, 0.0));
+    }
+}

@@ -1,0 +1,15 @@
+#version 450
+// fg guard, pass 3: when pass 2 decided to hold, the generated frame becomes the next real frame: the same picture
+// twice (a held real frame), never a mix of two views.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 1) uniform sampler2D next_c;
+layout(set = 0, binding = 2) buffer B { uint sum; uint lum; uint count; uint state; uint hold; uint skipped; uint rel_max; uint rel_sum; } buf;
+layout(set = 0, binding = 3, rgba8) uniform image2D outi;
+layout(push_constant) uniform PC { ivec2 size; float hi; float lo; int hold; } pc;
+void main()
+{
+    if (buf.state == 0u) return;
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= pc.size.x || p.y >= pc.size.y) return;
+    imageStore(outi, p, vec4(texelFetch(next_c, p, 0).rgb, 1.0));
+}

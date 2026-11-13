@@ -1,0 +1,38 @@
+#version 450
+// fg guard, pass 1: how far apart are the two real frames? Luma on every 4th pixel, summed per work group = one
+// cell of 64x64 px (a box-downsampled picture, about 20x12 cells at 720p). Each cell adds |prev - next| to buf.sum
+// and max(prev, next) to buf.lum (luma x 255, integer atomics): sum / lum is the frame difference relative to
+// the picture's own brightness -- an absolute difference never trips in a night scene (Festival of Blood's mean
+// luma is ~0.09), which is where the generated frames doubled.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0) uniform sampler2D prev_c;
+layout(set = 0, binding = 1) uniform sampler2D next_c;
+layout(set = 0, binding = 2) buffer B { uint sum; uint lum; uint count; uint state; uint hold; uint skipped; uint rel_max; uint rel_sum; } buf;
+layout(push_constant) uniform PC { ivec2 size; float hi; float lo; int hold; } pc;
+shared uint sp[256];
+shared uint sn[256];
+float L(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy) * 4;
+    uint a = 0u, b = 0u;
+    if (p.x < pc.size.x && p.y < pc.size.y) {
+        a = uint(L(texelFetch(prev_c, p, 0).rgb) * 255.0 + 0.5);
+        b = uint(L(texelFetch(next_c, p, 0).rgb) * 255.0 + 0.5);
+    }
+    sp[gl_LocalInvocationIndex] = a;
+    sn[gl_LocalInvocationIndex] = b;
+    barrier();
+    for (uint s = 128u; s > 0u; s >>= 1) {
+        if (gl_LocalInvocationIndex < s) {
+            sp[gl_LocalInvocationIndex] += sp[gl_LocalInvocationIndex + s];
+            sn[gl_LocalInvocationIndex] += sn[gl_LocalInvocationIndex + s];
+        }
+        barrier();
+    }
+    if (gl_LocalInvocationIndex == 0u) {
+        uint cp = sp[0], cn = sn[0];
+        atomicAdd(buf.sum, cp > cn ? cp - cn : cn - cp);
+        atomicAdd(buf.lum, max(cp, cn));
+    }
+}

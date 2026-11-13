@@ -1,0 +1,29 @@
+--- main.cpp
++++ main.cpp
+@@ -123,6 +123,7 @@
+ int      cellGcm_rsx_doorbell_wait(unsigned us);  /* the timed sleep, ended early by a ring: 1 = early */
+ unsigned cellGcm_rsx_progress(void);              /* passes that moved get */
+ void     cellGcm_rsx_doorbell_counts(unsigned c[3]);
++void     cellGcm_rsx_guard_counts(unsigned g[2]);  /* doorbell ref hold: full sleeps forced, re-entry tripwire hits */
+ }
+ 
+ /* ---------------------------------------------------------------------------
+@@ -390,14 +391,15 @@
+         ULONGLONG now = GetTickCount64();
+ #if !defined(_WIN32)
+         if (db_live && now - db_log >= 10000) {      /* rsx doorbell: what the waits did, per 10 s */
+-            unsigned c[3];
++            unsigned c[3], g[2];
+             cellGcm_rsx_doorbell_counts(c);
++            cellGcm_rsx_guard_counts(g);
+             if (db_log)
+                 fprintf(stderr, "[rsx doorbell] 10 s: %u waits skipped (work already there), %u spins (%u hit), "
+                         "%u doorbell waits (%u ended early; rings: hle %u, spu label %u, ref read %u), "
+-                        "%u early passes found nothing\n",
++                        "%u early passes found nothing, ref holds %u, re-entries %u\n",
+                         g_fc_db.at_once, g_fc_db.spins, g_fc_db.spin_hits, g_fc_db.bells, g_fc_db.bell_early,
+-                        c[0], c[1], c[2], g_fc_db.wasted);
++                        c[0], c[1], c[2], g_fc_db.wasted, g[0], g[1]);
+             memset(&g_fc_db, 0, sizeof g_fc_db);
+             db_log = now;
+         }

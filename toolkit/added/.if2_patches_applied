@@ -1,0 +1,470 @@
+PS5 SPU setjmp
+PS5 audio: end of the SDL functions
+PS5 audio: sceAudioOut backend
+PS5 load macro
+PS5 loader
+PS5 no dlclose
+PS5 pad: scePad init
+PS5 pad: scePad poll
+PS5 surface
+PS5 swapchain extent
+PS5 vm commit no-op
+PS5 window
+SPIR-V disk cache
+SPIR-V disk cache: getpid
+audio hold helper
+audio hold loop
+audio hold track
+audio out ch avail
+audio out ch avail2
+audio out ch configure log
+audio out ch devinfo
+audio raw8
+barriers over every layer
+batch: begin/submit
+batch: deferred buffer destroy
+batch: deferred image destroy
+batch: depth rgba8 flushes
+batch: descriptors from the ring
+batch: draw binds
+batch: draw data
+batch: engine submit_and_wait flushes
+batch: flush
+batch: load vkResetDescriptorPool
+batch: present readback flushes
+batch: readback flushes
+batch: ring + per-draw sets
+batch: state
+batch: window present ends the buffer
+batch: window present starts clean
+caswatch max
+cube create: image
+cube create: layers
+cube create: view
+cube descriptors
+cube flag
+cube upload: faces
+cube upload: layer
+dbgsrv regs
+dbgsrv shot flag
+dbgsrv shot now
+dbgsrv spu ctx dump to
+dbgsrv spuregs
+dbgsrv tdump chain
+dbgsrv tdump head
+dbgsrv tdump tail
+dbgsrv tdump tid
+dbgsrv tdump win stub
+devpad record env: flush
+devpad record env: start
+devpad replay env
+devpad: api
+devpad: hook
+dummy cube
+eng blit log
+eng blit log: distinct
+eng clearlog
+eng gpu ssao wb knob
+eng live debug capture
+eng live debug core
+eng live debug rs
+eng passlog
+eng passlog clear
+eng passlog drawn
+eng passlog dump
+eng passlog dump handle
+eng passlog frame
+eng texwatch
+eng zprobe
+evq stall report
+evq stall wait
+evt receive trace
+fp regs: 64 (decl)
+fp regs: 64 (init)
+fs slow: cellFsRead
+fs slow: sys_fs_read
+gcm const engine only
+gcm const fast decl
+gcm const fast dispatch
+gcm const fast engine
+gcm const fast engine decl
+gcm const fast walker
+ib cache 4096: count nofn
+ib cache 4096: nofn table
+ib cache 4096: report nofn
+ib cache 4096: size
+ibstat: cache
+ibstat: counters
+ibstat: nofn
+ibstat: slow reasons
+ibstat: task
+icons ps5 default
+idx memo draw
+idx memo fetch fill
+idx memo indices
+idx memo lookup
+idx memo multi gate
+idx memo multi lookup
+idx memo nonindexed fill
+idx memo plan fill
+idx memo refs0
+idx memo remap
+idx memo reset
+idx memo skip decode
+idx memo sparse lookup
+idx memo sparse struct
+idx memo stats
+idx memo struct
+inline stores: after-store notify
+inline stores: armed
+inline stores: bitmap
+inline stores: header fob
+inline stores: header if1
+inline stores: header if2
+inline stores: loader opt-out
+kb not connected
+kb not connected include
+layered views
+lazy ovl: adopt
+lazy ovl: on miss
+lazy ovl: revalidate
+lfq poll: install
+lfq poll: wrapper
+lifter resv first: ldarx
+lifter resv first: lwarx
+load vkCmdCopyImage
+lwsync cv reuse
+ovl lift index: decl
+ovl lift index: fill
+ovl lift index: reset
+ovl lift index: walk
+pad latch: collect
+pad latch: consume
+pad latch: deliver
+pad latch: state
+pad trace
+per-unit texture bindings
+perfdiag: cellFsRead span
+perfdiag: flush note
+perfdiag: flush wait
+perfdiag: fs include
+perfdiag: fsread kind
+perfdiag: label hook
+perfdiag: pipeline build timing
+perfdiag: ppu label
+perfdiag: present wait
+perfdiag: rotate
+perfdiag: rotate at end
+perfdiag: rotate init
+perfdiag: rotate state
+perfdiag: spirv include
+perfdiag: spirv miss timing
+perfdiag: spu async label
+perfdiag: spu fallback label
+perfdiag: spu label
+perfdiag: spu task label
+perfdiag: sys_fs include
+perfdiag: sys_fs_read span
+pipeline cube mask
+pipeline cube mask field
+ppu fast: always_inline store 16 fob
+ppu fast: always_inline store 16 if1
+ppu fast: always_inline store 16 if2
+ppu fast: always_inline store 32 fob
+ppu fast: always_inline store 32 if1
+ppu fast: always_inline store 32 if2
+ppu fast: always_inline store 64 fob
+ppu fast: always_inline store 64 if1
+ppu fast: always_inline store 64 if2
+ppu fast: always_inline store 8 fob
+ppu fast: always_inline store 8 if1
+ppu fast: always_inline store 8 if2
+ppu fast: atomic fences
+ppu fast: ctx dispatch
+ppu fast: ctx index
+ppu fast: prx export hash
+ppu fast: prx gen forward
+ppu fast: prx gen on add
+ppu fast: prx gen on remove
+ppu fast: prx gen on replace
+ppu fast: vmx add ref
+ppu fast: vmx avx
+ppu fast: vmx madd ref
+ppu fast: vmx nmsub ref
+ppu fast: vperm fallback
+ppu fast: vperm sse
+ps5 game free space
+remap scan vec
+robustBufferAccess
+rsx const fast: const label
+rsx const fast: jump
+rsx const fast: load label
+rsx method histogram
+samplers back to one array
+skip movies case
+skip movies open
+slow pipe: fp done
+slow pipe: report
+slow pipe: start
+slow pipe: vp done
+snap2 field
+snap2 release
+snapshot hooks
+snapshot hooks in the table
+spin off: kick default
+spin off: spu default
+spin waits fix: spu counters
+spin waits fix: spu knob
+spin waits: kick gen
+spin waits: memkick
+spin waits: spu
+spu bytes ssse3: base
+spu bytes ssse3: spu_cwd
+spu bytes ssse3: spu_rotqby
+spu bytes ssse3: spu_rotqbybi
+spu bytes ssse3: spu_rotqbyi
+spu bytes ssse3: spu_rotqmby
+spu bytes ssse3: spu_rotqmbybi
+spu bytes ssse3: spu_rotqmbyi
+spu bytes ssse3: spu_shlqby
+spu bytes ssse3: spu_shlqbybi
+spu bytes ssse3: spu_shlqbyi
+spu call fast 2: jump return
+spu call fast: img restore moved
+spu call fast: inline drain
+spu call fast: inline img restore
+spu call fast: slow drain
+spu chwait: knob
+spu chwait: poll
+spu contention ab: coh_mark_line
+spu contention ab: memkick
+spu contention ab: putllc
+spu contention off: runtime/spu/spu_channels.c
+spu contention off: runtime/spu/spu_coherency.c
+spu contention: coh_mark_line
+spu contention: memkick
+spu contention: memkick spinners in
+spu contention: memkick spinners out
+spu contention: putllc counter
+spu dma fast: fence env
+spu dma fast: fence var
+spu dma fast: gm vec include
+spu dma fast: gm_copy_from
+spu dma fast: gm_copy_to
+spu dma fast: gm_equal
+spu dma fast: inline wrch
+spu dma fast: wrch opt-out
+spu dma fast: x86 fence
+spu evt fail log
+spu ffast: exact fa/fm out of line
+spu ffast: native fast paths
+spu float avx2
+spu fz2: FZ2 macro
+spu fz2: FZ3 macro
+spu fz2: result check + xmm slow
+spu fz: exact out of line 2
+spu fz: exact out of line 3
+spu fz: mxcsr in run_with_halt
+spu fz: mxcsr restore
+spu fz: native float under RZ mxcsr
+spu fz: rn dfa
+spu fz: rn dfmx begin
+spu fz: rn dfmx end
+spu fz: rn frds begin
+spu fz: rn frds end
+spu fz: rn helpers
+spu interp lsdump
+spu interp: continue at rejoin
+spu irq: pc max
+spu ovl: clear on unmatched module
+spu pollwake counters plain
+spu pollwake probe
+spu pollwake wait counters plain
+spu pollwake wait end
+spu pollwake wait report
+spu pollwake wait vars
+spu putllc diff
+spu rejoin: who
+spu reloc sig
+spu reloc sig adopt
+spu reloc sig fast: indirect branch
+spu reloc sig fast: negative cache
+spu reloc sig fast: scan
+spu reloc sig interp
+spu shufb2: host order
+spu unlifted lsdump
+spu vcvt: cflt/csflt sse
+spu vcvt: fc sse
+spu vcvt: fi exact rename
+spu vcvt: fi sse
+spu x86 ls include
+spu x86 ls read128
+spu x86 ls write128
+spu x86 m128 converters
+spu x86 spu_mpy
+spu x86 spu_mpya
+spu x86 spu_mpyh
+spu x86 spu_mpyhh
+spu x86 spu_mpyi
+spu x86 spu_mpyu
+spu x86 spu_mpyui
+spu xv ftz: fa
+spu xv ftz: fm
+spu xv ftz: fma
+spu xv ftz: ftz
+spu xv ftz: underflow
+spv memcache: includes
+spv memcache: loader
+spv memcache: lookup
+spv memcache: write
+sys_memory: 213 MB limit
+sys_memory: available never wraps
+sys_memory: reuse freed blocks
+tdump event include
+tdump event queues
+tdump main live ctx decl
+tdump main live ctx def
+tdump main live ctx set
+tdump main live ctx set2
+tdump main live ctx use
+tdump regs
+tdump spu contexts
+tdump waits: hle array
+tdump waits: hle set
+tdump waits: per thread
+tdump waits: printer
+tdump waits: sc arrays
+tdump waits: sc set
+texture array -> per-unit (1)
+texture array -> per-unit (2)
+thread trace
+timer absolute
+timer absolute log
+usleep kick core
+usleep kick header
+usleep kick putllc
+usleep kick putlluc
+usleep kick spu put
+usleep kick sys_timer
+vc sparse probe
+vc sparse struct
+vk async: buffer garbage
+vk async: fb defer
+vk async: flush retires
+vk async: gobj
+vk async: idle forced flush
+vk async: image garbage
+vk async: pipe defer
+vk async: present no flush
+vk async: present setup
+vk async: present submit
+vk async: slot free
+vk async: slots
+vk d24 clamp cpu
+vk d24 clamp gpu
+vk d24 clamp switch
+vk dedup begin
+vk dedup draw
+vk dedup pipeline
+vk dedup state
+vk depth8 guard: create
+vk depth8 guard: lookup
+vk depth8 guard: struct
+vk depth8: hook
+vk depth8: pass
+vk dset reuse: batch pool
+vk dset reuse: compare + remember
+vk dset reuse: destroy image
+vk dset reuse: dummy cube
+vk dset reuse: engine bind
+vk dset reuse: engine types
+vk dset reuse: engine ubo types
+vk dset reuse: epoch 1
+vk dset reuse: epoch 2
+vk dset reuse: epoch decl
+vk dset reuse: garbage 1
+vk dset reuse: garbage 2
+vk dset reuse: guest bi
+vk dset reuse: guest bind
+vk dset reuse: guest pool
+vk dset reuse: guest writes
+vk dset reuse: layout
+vk dset reuse: offsets
+vk dset reuse: report
+vk dset reuse: samplers
+vk dset reuse: state
+vk dset reuse: try reuse
+vk dump every
+vk dump full
+vk dump full 2
+vk dz invalidate forget
+vk dz invalidate release
+vk ftrace line: def
+vk ftrace line: flush
+vk ftrace line: span
+vk ftrace: gpu wait
+vk ftrace: include
+vk garbage log
+vk garbage log: bytes
+vk light: decls
+vk light: pass
+vk light: table
+vk mrt mask
+vk mrt mask 2
+vk nodraw: skip
+vk pipe async: includes
+vk pipe async: pipe fields
+vk pipe async: submit
+vk pipe async: variant check
+vk pipe async: workers
+vk pipe block: draw size
+vk pipe block: flag
+vk pipe block: log
+vk pipe block: pending wait
+vk pipe block: submit wait
+vk pipe limit log
+vk pipe limit size
+vk readback view
+vk readback view calloc
+vk rpmerge: close
+vk rpmerge: draw begin
+vk rpmerge: draw end
+vk samp limit log
+vk samp limit size
+vk ssao: passes
+vk ssao: table
+vk stage ring decl
+vk stage ring fwd
+vk stage ring levels
+vk stage ring levels 2
+vk stage ring rows
+vk stage ring usage
+vk tex3d fix: parse
+vk tex3d: black cube
+vk tex3d: create upload
+vk tex3d: descriptors
+vk tex3d: hooks
+vk tex3d: log
+vk tex3d: masks
+vk tex3d: obj field
+vk tex3d: pipe field
+vk tex3d: pipe mask
+vk ubo shadow: alloc
+vk ubo shadow: decl
+vk ubo shadow: ps
+vk ubo shadow: put
+vk ubo shadow: ring
+vk ubo shadow: save/restore
+vk ubo shadow: vs
+vk vcache: draw_from
+vk vcache: draw_from body
+vk vcache: hooks
+vk vcache: present skip
+vk vcache: readback due
+vk vcache: readback due end
+vk vcache: ring size
+vk vcache: ring skip
+vk vpc range: bind
+vk vpc range: hook
+vk vpc range: ring copy
+vk vpc range: state
