@@ -1409,7 +1409,7 @@ void ps5_app_setup(int* argc, char*** argv)
      * callers; RPCS3 itself warns "Lightning sounds might be distorted") = the user's distortion on explosions/lightning.
      * Off now that the game has 13 threads: audio SPUs 13+7% -> 35+16% of a core, if1 29.9 -> 28.9 fps on the BC-250.
      * PS3_IF1_AUDIO_PATCH=1 in env.txt = the patch again. */
-    if (G_IF1) env_default("PS3_IF1_AUDIO_PATCH", "0");
+    if (G_IF1) env_default("PS3_IF1_AUDIO_PATCH", "1");
     /* vk stencil (2026-11-11): a real stencil plane for the engine's depth targets. inFAMOUS 2 / Festival of Blood tag
      * characters with stencil bit 0x80 and use it for the character shadow bias, the ambient term (x1.0 characters,
      * x0.35 world) and to clip per-character effects to the silhouette. Without it: faceted blue self-shadow and the
