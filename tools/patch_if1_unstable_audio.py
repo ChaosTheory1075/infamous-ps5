@@ -13,7 +13,8 @@ NOPS = [("ppu_recomp_004.cpp", "if (((ctx->cr >> 1) & 1)) goto loc_0028BD08;", "
         ("ppu_recomp_009.cpp", "if ((!((ctx->cr >> 2) & 1))) goto loc_0050F730;", "0050F698", "0050F648", 20),
         ("ppu_recomp_009.cpp", "goto loc_0050F6D8;", "0050F754", "0050F74C", 2),
         ("ppu_recomp_009.cpp", "if (((ctx->cr >> 1) & 1)) goto loc_0051979C;", "005197DC", "005197A8", 13),
-        ("ppu_recomp_009.cpp", "if (((ctx->cr >> 2) & 1)) goto loc_00519948;", "00519900", "005198BC", 17),
+        # 0x00519900 (bgt past a 10-entry jump table) deliberately NOT dropped: with it gone an out-of-range voice
+        # state jumps to garbage (the audio thread dies, audio freezes and loops). In-range: identical.
         ("ppu_recomp_009.cpp", "if ((!((ctx->cr >> 1) & 1))) goto loc_005197E0;", "00519798", "00519790", 2)]
 TAG = "/* if1 unstable audio */"
 import glob, os
@@ -54,4 +55,4 @@ h = os.path.join(R, "ppu_recomp.h"); t = open(h).read()
 if "g_if1_unst_audio" not in t:
     t += "\n/* if1 unstable audio (tools/patch_if1_unstable_audio.py) */\n#ifdef __cplusplus\nextern \"C\"\n#endif\nint g_if1_unst_audio;\n"
     open(h, "w").write(t)
-print("if1 unstable audio: %d of 14 sites patched" % n)
+print("if1 unstable audio: %d of 13 sites patched" % n)
