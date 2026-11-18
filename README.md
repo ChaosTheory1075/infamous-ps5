@@ -34,14 +34,17 @@ Productions. **No game files are included:** you need your own copies of the gam
 
 | Game | Edition | Files |
 |---|---|---|
-| inFAMOUS | USA disc **BCUS98119** (v1.00 or v2.00) or Europe disc **BCES00220** | a decrypted `.iso` or the disc's folder |
-| inFAMOUS 2 | USA disc **BCUS98125** (v1.00 or v2.00) + its four updates **1.01, 1.02, 1.03, 1.04** | a decrypted `.iso` or the disc's folder, plus the four update `.pkg` files |
+| inFAMOUS | USA disc **BCUS98119** (v1.00 or v2.00) or Europe disc **BCES00220** | the disc itself in the PS5's drive, an `.iso` (encrypted or decrypted) or the disc's folder |
+| inFAMOUS 2 | USA disc **BCUS98125** (v1.00 or v2.00) + its four updates **1.01, 1.02, 1.03, 1.04** | the disc itself in the PS5's drive, an `.iso` (encrypted or decrypted) or the disc's folder, plus the four update `.pkg` files |
 | Festival of Blood | USA PSN **NPUA80657** | the `.pkg` and its `.rap` licence file |
 
 - inFAMOUS 2's updates: the launcher downloads the four official update packages (258 MB) from Sony's PS3
   update server for you (CONTENT page: X shows a notice, X again starts it; the PS5 needs internet; each file is
   checked against Sony's checksum). You can also copy them into `install/` by hand. All four are needed.
-- An encrypted ISO (as dumped) is refused: decrypt it first (PS3Dec). No PS3 firmware file is needed.
+- **Straight from the disc:** put the PS3 disc in the PS5's drive (the PS5 says "unsupported disc"; that is fine)
+  and press INSTALL: the installer reads and decrypts the disc itself (Redump's published disc keys). It reads at
+  the drive's speed, about 26 MB/s (inFAMOUS 2: ~12 minutes). This needs the payload loader on port 9021.
+- An encrypted ISO (as dumped, Redump) works too, for the editions above; no PS3Dec step. No PS3 firmware file is needed.
 - Free space: about 7.5 GB (inFAMOUS), 18 GB (inFAMOUS 2), 4.4 GB (Festival of Blood), plus the dumps until
   you delete them.
 
@@ -76,7 +79,7 @@ frame generation, SPU/PPU runtime changes) and erikomis' infamous2-recomp port t
 
 | Path | What it is |
 |---|---|
-| `tools/ps5/launcher/` | The launcher (`launcher.c`, texts in `launcher_text.inc`) and the installer (`installer.c`: decrypted ISO, disc folder, PSN package, update download) |
+| `tools/ps5/launcher/` | The launcher (`launcher.c`, texts in `launcher_text.inc`) and the installer (`installer.c`: the disc in the PS5's drive, ISO (decrypted or encrypted), disc folder, PSN package, update download) |
 | `tools/ps5/` | PS5 glue: `ps5_app.c` (per-game defaults, settings, trophies), `ps5_shims.c`, the linker scripts, `ps5link.sh`, `build_if2.sh` (all three games), `ps5.cmake`, `ps5cc` |
 | `tools/` | The edits to the port sources and the recompiled code (each an exact-text insertion that stops if its anchor is not found once), build and measurement scripts |
 | `toolkit/` | Our changes to ps3recomp: `BASE_COMMIT.txt`, `ps3recomp-fork.patch`, `added/` |

@@ -294,6 +294,11 @@ typedef struct {
     uint64_t total;
     uint64_t pkg_data;              /* PKG: the data area's file offset */
     uint8_t pkg_riv[16]; inst_aes_t pkg_aes;
+    /* disc (2026-11-17): an encrypted PS3 disc image or the PS5's own drive (/dev/cd0): the sectors between the
+     * disc's plain regions are AES-128-CBC with the disc key, IV = the sector number */
+    int enc; inst_aesd_t dkey; uint32_t nplain, plain[2 * 32];   /* plain regions: [plain[2i], plain[2i+1]] inclusive */
+    int disc_mnt;                   /* /mnt/disc seen from the app: identifies the disc; its files read encrypted */
+    uint8_t* sec;                   /* raw sector buffer for the reads (INST_SECBUF) */
 } inst_src_t;
 
 static void inst_add(inst_src_t* s, const char* rel, uint64_t size)
@@ -306,6 +311,7 @@ static void inst_add(inst_src_t* s, const char* rel, uint64_t size)
 }
 static void inst_src_free(inst_src_t* s)
 {
+    free(s->sec); s->sec = NULL;
     for (int i = 0; i < s->n; i++) free(s->e[i].rel);
     free(s->e); s->e = NULL; s->n = s->cap = 0;
     if (s->fd >= 0) close(s->fd);
@@ -321,6 +327,34 @@ static int inst_pread(int fd, void* b, size_t n, uint64_t off)
         const ssize_t r = read(fd, p, n);
         if (r <= 0) return -1;
         p += r; n -= (size_t)r;
+    }
+    return 0;
+}
+/* disc: n bytes at byte a of an ISO source, always as whole sectors (the PS5's drive, /dev/cd0, takes nothing else),
+ * the encrypted ones decrypted. */
+enum { INST_SECBUF = 512 };   /* sectors per raw read: 1 MB */
+static int inst_sec_enc(const inst_src_t* s, uint32_t sec)
+{
+    if (!s->enc) return 0;
+    for (uint32_t i = 0; i < s->nplain; i++) if (sec >= s->plain[2 * i] && sec <= s->plain[2 * i + 1]) return 0;
+    return 1;
+}
+static int inst_iso_rd(inst_src_t* s, uint64_t a, uint8_t* buf, size_t n)
+{
+    if (!s->sec && !(s->sec = malloc((size_t)INST_SECBUF * 2048))) return -1;
+    while (n) {
+        const uint64_t sec = a / 2048; const size_t in = (size_t)(a % 2048);
+        size_t ns = (in + n + 2047) / 2048; if (ns > INST_SECBUF) ns = INST_SECBUF;
+        if (inst_pread(s->fd, s->sec, ns * 2048, sec * 2048)) return -1;
+        for (size_t j = 0; j < ns; j++)
+            if (inst_sec_enc(s, (uint32_t)(sec + j))) {
+                uint8_t iv[16] = { 0 }; const uint32_t v = (uint32_t)(sec + j);
+                iv[12] = (uint8_t)(v >> 24); iv[13] = (uint8_t)(v >> 16); iv[14] = (uint8_t)(v >> 8); iv[15] = (uint8_t)v;
+                inst_aes_cbc_dec(&s->dkey, iv, s->sec + j * 2048, 2048);
+            }
+        size_t m = ns * 2048 - in; if (m > n) m = n;
+        memcpy(buf, s->sec + in, m);
+        buf += m; n -= m; a += m;
     }
     return 0;
 }
@@ -341,7 +375,7 @@ static int inst_read(inst_src_t* s, const inst_ent_t* e, uint64_t off, uint8_t* 
             if (off < base + e->len[x]) {
                 const uint64_t in = off - base;
                 size_t m = (size_t)(e->len[x] - in < n ? e->len[x] - in : n);
-                if (inst_pread(s->fd, buf, m, e->off[x] + in)) return -1;
+                if (inst_iso_rd(s, e->off[x] + in, buf, m)) return -1;
                 buf += m; n -= m; off += m;
             }
             base += e->len[x];
@@ -524,6 +558,7 @@ static void inst_iso_walk(inst_src_t* s, uint32_t lba, uint32_t len, int joliet,
     }
     free(d);
 }
+static int inst_disc_key(inst_src_t* s, const inst_ent_t* eb);   /* disc (below) */
 static int inst_open_iso(inst_src_t* s, const char* path, char* why, size_t whyn)
 {
     s->kind = SRC_ISO;
@@ -555,16 +590,59 @@ static int inst_open_iso(inst_src_t* s, const char* path, char* why, size_t whyn
     for (int i = 0; i < all.n; i++) free(all.e[i].rel);
     free(all.e);
     if (!s->n) { snprintf(why, whyn, "no PS3_GAME folder in it"); return -1; }
-    /* An encrypted (Redump) image: EBOOT.BIN is a SELF ("SCE\0") only once decrypted. */
+    /* An encrypted (Redump) image or the disc itself: EBOOT.BIN is a SELF ("SCE\0") only once decrypted; then the
+     * disc key that makes it one (kInstDiscKeys), and every read decrypts. */
     const int eb = inst_find(s, "USRDIR/EBOOT.BIN");
     if (eb >= 0) {
         uint8_t m[4] = { 0 };
         if (inst_read(s, &s->e[eb], 0, m, 4) || memcmp(m, "SCE\0", 4)) {
-            snprintf(why, whyn, "this ISO is encrypted: use a decrypted one (.dec.iso, or run it through PS3Dec first)");
-            return -1;
+            if (inst_disc_key(s, &s->e[eb]) || inst_read(s, &s->e[eb], 0, m, 4) || memcmp(m, "SCE\0", 4)) {
+                snprintf(why, whyn, "this disc / ISO is encrypted with a key this doesn't have (a decrypted .iso works)");
+                return -1;
+            }
         }
     }
     return 0;
+}
+
+/* disc keys (Redump's published PS3 disc keys, 2026-11-17): each inFAMOUS / inFAMOUS 2 pressing. A disc or an
+ * encrypted image is tried with each; the right one turns EBOOT.BIN's first sector into a SELF ("SCE\0"). */
+static const uint8_t kInstDiscKeys[][16] = {
+    { 0x55,0x9c,0x30,0xf3,0x46,0x8c,0xd2,0xcb,0xdf,0x09,0xb1,0xaf,0xa8,0x09,0x3a,0xdc },   /* inFAMOUS 2 (Asia) */
+    { 0xb8,0x95,0x44,0x7f,0x05,0x75,0x40,0xc7,0x28,0x74,0xbd,0xc6,0xae,0xba,0xb1,0x99 },   /* inFAMOUS 2 (Europe, Australia) */
+    { 0x7e,0x40,0xb7,0x93,0xcb,0x5d,0xd7,0xbc,0x4c,0x89,0x2e,0x9e,0x9c,0x45,0x5c,0x2d },   /* inFAMOUS 2 (Japan) */
+    { 0x1a,0x4e,0x94,0x45,0x88,0x14,0xf0,0x5b,0x11,0x2e,0x3f,0xa2,0xed,0x90,0x12,0x38 },   /* inFAMOUS 2 (Turkey) */
+    { 0x79,0x6c,0xa3,0xc1,0x99,0xae,0xac,0xb2,0xc3,0x08,0x64,0xc5,0x11,0xab,0x0a,0x83 },   /* inFAMOUS 2 (UK) */
+    { 0xc6,0x13,0x7e,0x41,0xa0,0xf4,0xd2,0x9f,0x8c,0x12,0x5d,0x7a,0x5f,0x35,0x20,0x8b },   /* inFAMOUS 2 (USA) v01.00 / v02.00, BCUS98125 */
+    { 0xdd,0xa0,0xab,0xdc,0xe4,0x5d,0x5f,0x22,0xc9,0x68,0x5d,0x4d,0x48,0xc8,0x63,0x88 },   /* inFAMOUS (Japan) */
+    { 0x34,0x29,0x17,0x03,0xa6,0x22,0xed,0x1d,0x81,0xd2,0x8a,0x7e,0xcb,0xae,0x5a,0x8d },   /* inFAMOUS (Asia) */
+    { 0x23,0x33,0xc4,0x6d,0x2d,0xeb,0xff,0xf6,0xfb,0x83,0x2d,0x68,0xff,0xee,0x14,0xad },   /* inFAMOUS (Europe, Australia) */
+    { 0x43,0x57,0x8e,0x5c,0x93,0x0c,0xa9,0x74,0xd5,0xa4,0x75,0x32,0x0c,0xea,0x6b,0x7a },   /* inFAMOUS (Europe, Fr/De/Es/It/Nl) */
+    { 0x07,0x94,0x46,0x53,0x69,0xa9,0xc0,0xf2,0x89,0x50,0xb7,0x7c,0x31,0x8d,0xb8,0x58 },   /* inFAMOUS (Poland) */
+    { 0x2d,0x91,0xb0,0xba,0x66,0xc3,0x8d,0x54,0xf7,0x69,0x75,0xea,0xd6,0x51,0x89,0x6d },   /* inFAMOUS (USA) v01.00 / v02.00, BCUS98119 */
+};
+/* An encrypted image / disc: its plain regions from sector 0, then the key that decrypts EBOOT.BIN. 0 = found. */
+static int inst_disc_key(inst_src_t* s, const inst_ent_t* eb)
+{
+    uint8_t h[2048];
+    if (inst_pread(s->fd, h, 2048, 0)) return -1;
+    const uint32_t n = be32(h);
+    if (!n || n > 32) return -1;
+    s->nplain = n;
+    for (uint32_t i = 0; i < 2 * n; i++) s->plain[i] = be32(h + 8 + 4 * i);
+    s->enc = 1;
+    const uint32_t lba = (uint32_t)(eb->off[0] / 2048);
+    uint8_t c[2048];
+    if (inst_pread(s->fd, c, 2048, (uint64_t)lba * 2048) || !inst_sec_enc(s, lba)) { s->enc = 0; return -1; }
+    for (unsigned k = 0; k < sizeof kInstDiscKeys / sizeof kInstDiscKeys[0]; k++) {
+        inst_aesd_t d; inst_aesd_key128(&d, kInstDiscKeys[k]);
+        uint8_t b[32]; memcpy(b, c, 32);
+        uint8_t iv[16] = { 0 }; iv[12] = (uint8_t)(lba >> 24); iv[13] = (uint8_t)(lba >> 16); iv[14] = (uint8_t)(lba >> 8); iv[15] = (uint8_t)lba;
+        inst_aes_cbc_dec(&d, iv, b, 32);
+        if (!memcmp(b, "SCE\0", 4)) { s->dkey = d; return 0; }
+    }
+    s->enc = 0;
+    return -1;
 }
 
 /* -- PKG (retail: AES-128-CTR, the public PS3 package key; the file table and data in one stream) */
@@ -607,6 +685,8 @@ static int inst_open_pkg(inst_src_t* s, const char* path, char* why, size_t whyn
     return s->n ? 0 : -1;
 }
 
+#define INST_DISC_DEV "/dev/cd0"    /* the PS5's Blu-ray drive, raw (a payload can read it; the app may not) */
+#define INST_DISC_MNT "/mnt/disc"   /* the same disc as the system mounts it: its files come back still encrypted */
 /* Open whatever path is (a .iso, a .pkg or a folder). 0 = a usable source (s->known may still be -1). */
 static int inst_open(inst_src_t* s, const char* path, char* why, size_t whyn)
 {
@@ -615,7 +695,7 @@ static int inst_open(inst_src_t* s, const char* path, char* why, size_t whyn)
     snprintf(s->name, sizeof s->name, "%s", b);
     const size_t l = strlen(path);
     int r;
-    if (l > 4 && !strcasecmp(path + l - 4, ".iso")) r = inst_open_iso(s, path, why, whyn);
+    if ((l > 4 && !strcasecmp(path + l - 4, ".iso")) || !strcmp(path, INST_DISC_DEV)) r = inst_open_iso(s, path, why, whyn);
     else if (l > 4 && !strcasecmp(path + l - 4, ".pkg")) r = inst_open_pkg(s, path, why, whyn);
     else r = inst_open_dir(s, path);
     if (r) { inst_src_free(s); return -1; }
@@ -690,6 +770,25 @@ static void inst_scan(const char* app)
         return;
     }
     char p[512];
+    /* disc: the PS3 disc in the PS5's drive. Raw (decrypted here) where we may read the drive (the install payload);
+     * else, seen from the app, the mounted disc only says which game it is (the install then needs the payload). */
+    {
+        struct stat st; char why[160];
+        if (!stat(INST_DISC_MNT "/PS3_GAME/PARAM.SFO", &st) && s_inst_nsrc < INST_MAXSRC) {
+            inst_src_t* s = &s_inst_src[s_inst_nsrc];
+            if (!inst_open(s, INST_DISC_DEV, why, sizeof why) && s->known >= 0) {
+                snprintf(s->name, sizeof s->name, "the disc in the PS5's drive");
+                s_inst_nsrc++;
+            } else {
+                if (s->fd >= 0 || s->n) inst_src_free(s);
+                if (!inst_open(s, INST_DISC_MNT, why, sizeof why) && s->known >= 0) {
+                    snprintf(s->name, sizeof s->name, "the disc in the PS5's drive");
+                    s->disc_mnt = 1;
+                    s_inst_nsrc++;
+                } else inst_src_free(s);
+            }
+        }
+    }
     snprintf(p, sizeof p, "%s/install", app); inst_scan_dir(p, 0);
     for (int u = 0; u < 8; u++) { snprintf(p, sizeof p, "/mnt/usb%d", u); inst_scan_dir(p, 0); }
     for (int u = 0; u < 2; u++) { snprintf(p, sizeof p, "/mnt/ext%d", u); inst_scan_dir(p, 0); }
@@ -708,8 +807,8 @@ static int inst_plan(int g, inst_src_t** out, char* need, size_t needn)
                                            || (!strcmp(s_inst_src[i].tid, "BCES00220") && strcmp(base->tid, "BCES00220")))) base = &s_inst_src[i];   /* inFAMOUS: the Europe disc first */
     }
     if (!base) {
-        snprintf(need, needn, g == INST_IF1 ? "the inFAMOUS disc (BCES00220 Europe or BCUS98119 USA: a decrypted ISO or its folder)"
-                            : g == INST_IF2 ? "the inFAMOUS 2 disc (BCUS98125, USA: a decrypted ISO or its folder)"
+        snprintf(need, needn, g == INST_IF1 ? "the inFAMOUS disc (BCES00220 Europe or BCUS98119 USA: in the PS5's drive, an ISO or its folder)"
+                            : g == INST_IF2 ? "the inFAMOUS 2 disc (BCUS98125, USA: in the PS5's drive, an ISO or its folder)"
                             : "the Festival of Blood package (NPUA80657, USA PSN .pkg) and its licence file (the .rap, next to the .pkg)");
         return 0;
     }
@@ -814,12 +913,67 @@ static int inst_fail(const char* fmt, const char* a)
     s_inst.state = 3;
     return -1;
 }
+/* overlap (2026-11-17): a reader thread fills one buffer while this thread writes the other, so the source (a
+ * disc drive above all: ~26 MB/s, idle during every write before) never waits for the destination. Only calls the
+ * launcher and the payload already import (pthread_create / pthread_detach, usleep): no new import. */
+static uint8_t* s_inst_buf2;
+typedef struct {
+    inst_src_t* s; const inst_ent_t* e;
+    uint8_t* buf[2]; size_t len[2];
+    int full[2];                    /* 1: buf[i] holds data for the writer (set by the reader, cleared by the writer) */
+    int stop, err, quit;            /* writer -> reader: stop; reader -> writer: a read failed / the thread has ended */
+} inst_rd_t;
+static void* inst_reader(void* arg)
+{
+    inst_rd_t* R = arg;
+    uint64_t off = 0;
+    for (int k = 0; off < R->e->size && !__atomic_load_n(&R->stop, __ATOMIC_ACQUIRE); k ^= 1) {
+        while (__atomic_load_n(&R->full[k], __ATOMIC_ACQUIRE) && !__atomic_load_n(&R->stop, __ATOMIC_ACQUIRE)) usleep(200);
+        if (__atomic_load_n(&R->stop, __ATOMIC_ACQUIRE)) break;
+        const size_t m = (size_t)(R->e->size - off < INST_BUF ? R->e->size - off : INST_BUF);
+        if (inst_read(R->s, R->e, off, R->buf[k], m)) { __atomic_store_n(&R->err, 1, __ATOMIC_RELEASE); break; }
+        R->len[k] = m;
+        __atomic_store_n(&R->full[k], 1, __ATOMIC_RELEASE);
+        off += m;
+    }
+    __atomic_store_n(&R->quit, 1, __ATOMIC_RELEASE);
+    return NULL;
+}
 static int inst_copy_ent(inst_src_t* s, const inst_ent_t* e, const char* dst)
 {
     if (inst_mkdirs(dst)) return inst_fail("Couldn't make the folder for %s", dst);
     const int fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0666);
     if (fd < 0) return inst_fail("Couldn't create %s", dst);
-    for (uint64_t off = 0; off < e->size;) {
+    if (!s_inst_buf2) s_inst_buf2 = malloc(INST_BUF);
+    inst_rd_t R; memset(&R, 0, sizeof R);
+    R.s = s; R.e = e; R.buf[0] = s_inst_buf; R.buf[1] = s_inst_buf2;
+    pthread_t th;
+    const int threaded = e->size > INST_BUF && s_inst_buf2 && !pthread_create(&th, NULL, inst_reader, &R);
+    if (threaded) pthread_detach(th);
+    int rc = 0;
+    if (threaded) {
+        for (int k = 0; ; k ^= 1) {
+            while (!__atomic_load_n(&R.full[k], __ATOMIC_ACQUIRE) && !__atomic_load_n(&R.quit, __ATOMIC_ACQUIRE)) usleep(200);
+            if (!__atomic_load_n(&R.full[k], __ATOMIC_ACQUIRE)) {   /* the reader ended: done, or a read failed */
+                if (__atomic_load_n(&R.err, __ATOMIC_ACQUIRE)) rc = inst_fail("Couldn't read %s from the source", e->rel);
+                break;
+            }
+            const size_t m = R.len[k];
+            for (size_t w = 0; w < m && !rc;) {
+                const ssize_t r = write(fd, R.buf[k] + w, m - w);
+                if (r <= 0) rc = inst_fail(errno == ENOSPC ? "Not enough free space (writing %s)" : "Couldn't write %s", dst);
+                else w += (size_t)r;
+            }
+            if (rc) break;
+            s_inst.done += m;
+            __atomic_store_n(&R.full[k], 0, __ATOMIC_RELEASE);
+        }
+        __atomic_store_n(&R.stop, 1, __ATOMIC_RELEASE);
+        while (!__atomic_load_n(&R.quit, __ATOMIC_ACQUIRE)) usleep(200);   /* R lives on this stack: let the reader end */
+        close(fd);
+        return rc;
+    }
+    for (uint64_t off = 0; off < e->size;) {   /* small files (one buffer), or no second buffer / thread */
         const size_t m = (size_t)(e->size - off < INST_BUF ? e->size - off : INST_BUF);
         if (inst_read(s, e, off, s_inst_buf, m)) { close(fd); return inst_fail("Couldn't read %s from the source", e->rel); }
         for (size_t w = 0; w < m;) {
@@ -1276,6 +1430,11 @@ static int inst_start(const char* app, int g)
     char need[300];
     s_inst.nsrc = inst_plan(g, s_inst.src, need, sizeof need);
     if (!s_inst.nsrc) { snprintf(s_inst.err, sizeof s_inst.err, "Missing %s", need); s_inst.state = 3; return -1; }
+    for (int i = 0; i < s_inst.nsrc; i++)
+        if (s_inst.src[i]->disc_mnt) {
+            snprintf(s_inst.err, sizeof s_inst.err, "Installing from the disc needs the payload loader (port 9021: etaHEN / elfldr)");
+            s_inst.state = 3; return -1;
+        }
     if (g == INST_FOB) snprintf(s_inst.rap, sizeof s_inst.rap, "%s", s_inst_rap);
     s_inst.state = 1;
     pthread_t t;
