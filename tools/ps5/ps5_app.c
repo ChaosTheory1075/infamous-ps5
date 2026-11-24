@@ -28,7 +28,6 @@
 
 static uint8_t* s_guest_base;   /* ps5_map_guest_vm's block: fault addresses inside it are guest addresses */
 static int s_log_fd = 2;        /* the log's descriptor (fileno(stderr) after freopen; not always 2) */
-static char s_dbg_dump[160] = APP "/logs/dbg_dump.txt";   /* the debug server's scratch file (this game's logs/) */
 void ps5_app_setup(int* argc, char*** argv);
 
 /* Crash report: which signal, the faulting address (as a guest address when it is one), the host
@@ -578,8 +577,15 @@ static int ps5_set_mask(unsigned long long m)
 void ps5_audio_spu_prio(const char* name)
 {
     /* DONTFLIP (audio tuning): keep the if1-only gate below -- see ~/inFamous/DONTFLIP.md. */
-    if (strncmp(name, "spu 1001", 8)) return;
     if (strcmp(PS5_GAME_DIR, "if1")) return;   /* inFAMOUS 1's audio fix only: in inFAMOUS 2 the raised audio SPU crashed the game (SPURS abort after the karma movie, 2026-11-08) */
+    /* 2026-11-17 (console log: silent audio blocks cluster in heavy fights at 20-25 fps): the rest of inFAMOUS 1's audio
+     * chain too -- brbDriver (PPU, woken by the 5333 us block timer, kicks the mix), the RADG5 mixer SPU (group 0x1002)
+     * and brbClient (PPU, its event queue). None of them spins (timer / event-queue waits, usleep). Off: PS5_IF1_AUDIO_CHAIN=0. */
+    if (strncmp(name, "spu 1001", 8)) {
+        if (strncmp(name, "spu 1002", 8) && strcmp(name, "brbDriver") && strcmp(name, "brbClient")) return;
+        const char* c = getenv("PS5_IF1_AUDIO_CHAIN");
+        if (c && *c == '0') return;
+    }
     static int prio = -1;
     if (prio < 0) { const char* e = getenv("PS5_AUDIO_SPU_PRIO"); prio = e && *e ? atoi(e) : 640; }
     if (prio < 256 || prio > 767) return;
@@ -601,7 +607,7 @@ void ps5_pin_self(const char* name)
     printf("[ps5] pin %s: CPUs 0x%llx -> %d (now 0x%llx)\n", name, m, r, now);
 }
 
-/* ps5 pin (PS5_PIN, default off; 2026-11-11 agent_affinity): give the frame-limiting threads a physical core each.
+/* ps5 pin (PS5_PIN, default off; 2026-11-11 affinity notes): give the frame-limiting threads a physical core each.
  * Console if2 log 11-11: RSX thread 0.89 busy, main PPU 0.73, five SPURS SPUs ~0.68, be async 0.36; 5.9 of 13 CPUs
  * busy, every thread FIFO 700 on mask 0x1fff, nothing pinned. Whether the console's scheduler keeps two busy
  * threads off one core is unknown (kern.sched.topology_spec does not exist there); two busy SMT siblings each lose
@@ -626,6 +632,16 @@ static const struct { const char* game; const char* isolate; } k_pin_table[] = {
 };
 static int s_pin_rsx, s_pin_main, s_pin_on;
 static unsigned long long s_pin_allowed, s_set_rsx, s_set_main, s_set_pool;
+/* pin audio (2026-11-17, inFAMOUS 1 only): PS5_PIN=...,audio gives the audio chain one full core of its own -- the audio
+ * SPURS (spu 1001.x, its plugin jobs run serially on ONE SPU, the explosion bottleneck), the RADG5 mixer (spu 1002.x),
+ * brbDriver / brbClient and our audio out / mixer threads. All of them wait on timers / events (no spinner). */
+static unsigned long long s_set_audio;
+static int s_pin_audio;
+static int pin_is_audio(const char* n)
+{
+    return !strncmp(n, "spu 1001", 8) || !strncmp(n, "spu 1002", 8) || !strcmp(n, "brbDriver") || !strcmp(n, "brbClient") ||
+           !strcmp(n, "audio out") || !strcmp(n, "audio mixer");
+}
 static int s_topo_ok;
 static uint64_t s_probe_jb[10];
 extern int ps5_setjmp(uint64_t* jb) __attribute__((returns_twice));   /* ps5_shims.c */
@@ -751,23 +767,25 @@ static void pin_setup(const char* game)
         if (!iso) { printf("[ps5] pin: off (no table entry for %s)\n", game); return; }
     } else iso = p;
     const int rsx = strstr(iso, "rsx") != NULL, mainp = strstr(iso, "main") != NULL;
-    if (!rsx && !mainp) { printf("[ps5] pin: off (PS5_PIN=%s names neither rsx nor main)\n", p); return; }
+    const int audio = strstr(iso, "audio") != NULL && !strcmp(PS5_GAME_DIR, "if1");   /* pin audio: inFAMOUS 1's thread names only */
+    if (!rsx && !mainp && !audio) { printf("[ps5] pin: off (PS5_PIN=%s names none of rsx, main, audio (if1))\n", p); return; }
     unsigned long long used = 0;
     if (rsx) { s_set_rsx = pin_pick_core("PS5_PIN_RSX_CPU", used); used |= s_set_rsx; }
     if (mainp) { s_set_main = pin_pick_core("PS5_PIN_MAIN_CPU", used); used |= s_set_main; }
+    if (audio) { s_set_audio = pin_pick_core("PS5_PIN_AUDIO_CPU", used); used |= s_set_audio; }
     s_set_pool = s_pin_allowed & ~used;
-    if ((rsx && !s_set_rsx) || (mainp && !s_set_main) || popc(s_set_pool) < 4) {
-        printf("[ps5] pin: off (allowed 0x%llx: not enough full cores; rsx 0x%llx main 0x%llx pool 0x%llx)\n",
-               s_pin_allowed, s_set_rsx, s_set_main, s_set_pool);
-        s_set_rsx = s_set_main = s_set_pool = 0;
+    if ((rsx && !s_set_rsx) || (mainp && !s_set_main) || (audio && !s_set_audio) || popc(s_set_pool) < 4) {
+        printf("[ps5] pin: off (allowed 0x%llx: not enough full cores; rsx 0x%llx main 0x%llx audio 0x%llx pool 0x%llx)\n",
+               s_pin_allowed, s_set_rsx, s_set_main, s_set_audio, s_set_pool);
+        s_set_rsx = s_set_main = s_set_audio = s_set_pool = 0;
         return;
     }
-    s_pin_rsx = rsx; s_pin_main = mainp;
+    s_pin_rsx = rsx; s_pin_main = mainp; s_pin_audio = audio;
     s_pin_on = 1;
-    printf("[ps5] pin: on (%s; isolate %s): allowed 0x%llx, rsx 0x%llx, main 0x%llx, pool 0x%llx\n",
-           p, iso, s_pin_allowed, s_set_rsx, s_set_main, s_set_pool);
+    printf("[ps5] pin: on (%s; isolate %s): allowed 0x%llx, rsx 0x%llx, main 0x%llx, audio 0x%llx, pool 0x%llx\n",
+           p, iso, s_pin_allowed, s_set_rsx, s_set_main, s_set_audio, s_set_pool);
 }
-/* Last thing in ps5_app_setup, after its own threads (status, debug server, the SDK's stack reaper) were made on the
+/* Last thing in ps5_app_setup, after its own threads (status, the SDK's stack reaper) were made on the
  * full mask: this thread takes the RSX set (main.cpp's frame_clock, made next, inherits it), the main set when it is
  * labelled "main". */
 static void pin_host_main(void)
@@ -787,6 +805,7 @@ int ps5_pin_policy(const char* name)
     if (!strcmp(name, "main")) m = s_pin_main ? s_set_main : s_set_pool;
     else if (!strcmp(name, "ps5 status")) m = s_pin_allowed;   /* the watchdog: every CPU, so it runs unless all 13 are held */
     else if (!strcmp(name, "vk present pacer")) m = s_pin_rsx ? s_set_rsx : s_set_pool;   /* mostly sleeping, paces the RSX thread's presents */
+    else if (s_pin_audio && pin_is_audio(name)) m = s_set_audio;   /* pin audio */
     else m = s_set_pool;   /* SPUs, be async, texhash helper, audio, guest PPU threads, pipeline builders */
     const int r = ps5_set_mask(m);
     static int logged;
@@ -867,185 +886,7 @@ static double cores_used(void)
     return c;
 }
 
-/* Debug server (PS5_DEBUG_PORT): port 9990 only with the launcher's DIAGNOSTICS on (apply_launcher_settings);
- * with it off, none unless env.txt asks (PS5_DEBUG_PORT=9990); PS5_DEBUG_PORT=0 = never. No password: anyone on
- * the LAN can read guest memory and press buttons, so a release does not listen by default (2026-11-11).
- * A text protocol on the console's network so the running game can be inspected from the PC (any line-based TCP client). One client
- * at a time, one command per line:
- *   ping                      game name and uptime
- *   threads                   every guest thread, SPU context and event queue (the PS3_THREAD_DUMP dump)
- *   regs <tid>                one guest thread's registers (tid as "threads" prints it, decimal)
- *   spuregs <ctx>             one SPU context's pc, status and 128 registers (ctx = "spu ctxN")
- *   mem <ea> <len>            guest memory as hex, 16 bytes a line (len <= 1 MB; hex numbers)
- *   rmem <ea> <len>           the same raw: "OK <len>\n" then the bytes (len <= 64 MB)
- *   ls <ctx> <lsa> <len>      an SPU context's local store as hex (ctx = the dump's "spu ctxN")
- *   shot                      the next present writes a screenshot (logs/shot.NNN.ppm)
- *   prof                      a profiler report into the log now
- *   flush                     flush the log to disk
- * It never writes guest memory; pad / rec / play (below) do inject controller input. */
-#include <sys/socket.h>
-#include <netinet/in.h>
-static const char* s_game_name = "?";
-static time_t s_t0;
-static int dbg_send(int fd, const void* p, size_t n)
-{
-    const char* c = (const char*)p;
-    while (n) {
-        const ssize_t w = send(fd, c, n, 0);
-        if (w <= 0) return -1;
-        c += w; n -= (size_t)w;
-    }
-    return 0;
-}
-static int dbg_printf(int fd, const char* fmt, ...)
-{
-    char b[512];
-    va_list ap;
-    va_start(ap, fmt);
-    const int n = vsnprintf(b, sizeof b, fmt, ap);
-    va_end(ap);
-    return dbg_send(fd, b, n < 0 ? 0 : (size_t)(n < (int)sizeof b ? n : (int)sizeof b - 1));
-}
-static int dbg_hex(int fd, const uint8_t* base, uint32_t ea, uint32_t len)
-{
-    char line[96];
-    for (uint32_t o = 0; o < len; o += 16) {
-        int n = snprintf(line, sizeof line, "%08X:", ea + o);
-        for (uint32_t k = 0; k < 16 && o + k < len; k++) n += snprintf(line + n, sizeof line - n, " %02X", base[o + k]);
-        line[n++] = '\n';
-        if (dbg_send(fd, line, (size_t)n)) return -1;
-    }
-    return 0;
-}
 static char s_root[64];   /* defined below (tentative definition) */
-static void dbg_command(int fd, char* cmd)
-{
-    unsigned a = 0, b = 0, c = 0;
-    if (!strcmp(cmd, "ping")) {
-        dbg_printf(fd, "pong %s up %lds\n", s_game_name, (long)(time(NULL) - s_t0));
-    } else if (!strcmp(cmd, "threads")) {
-        extern void ps3_thread_dump_to(FILE*, const char*);
-        FILE* f = fopen(s_dbg_dump, "w");
-        if (!f) { dbg_printf(fd, "ERR cannot open the dump file\n"); return; }
-        ps3_thread_dump_to(f, "debug server");
-        fclose(f);
-        f = fopen(s_dbg_dump, "r");
-        if (!f) { dbg_printf(fd, "ERR cannot reopen the dump file\n"); return; }
-        char buf[4096];
-        size_t n;
-        while ((n = fread(buf, 1, sizeof buf, f)) > 0) if (dbg_send(fd, buf, n)) break;
-        fclose(f);
-    } else if (sscanf(cmd, "regs %u", &a) == 1 || sscanf(cmd, "spuregs %u", &b) == 1) {
-        extern int ps3_thread_regs_to(FILE*, int);
-        extern int spu_ctx_regs_to(FILE*, int);
-        FILE* f = fopen(s_dbg_dump, "w");
-        if (!f) { dbg_printf(fd, "ERR cannot open the dump file\n"); return; }
-        const int ok = !strncmp(cmd, "spuregs", 7) ? spu_ctx_regs_to(f, (int)b) : ps3_thread_regs_to(f, (int)a);
-        fclose(f);
-        if (!ok) { dbg_printf(fd, "ERR no such live thread\n"); return; }
-        f = fopen(s_dbg_dump, "r");
-        if (!f) { dbg_printf(fd, "ERR cannot reopen the dump file\n"); return; }
-        char buf[4096];
-        size_t n;
-        while ((n = fread(buf, 1, sizeof buf, f)) > 0) if (dbg_send(fd, buf, n)) break;
-        fclose(f);
-    } else if (sscanf(cmd, "mem %x %x", &a, &b) == 2) {
-        if (!s_guest_base || b > (1u << 20) || (uint64_t)a + b > 0x100000000ull) { dbg_printf(fd, "ERR range\n"); return; }
-        dbg_hex(fd, s_guest_base + a, a, b);
-    } else if (sscanf(cmd, "rmem %x %x", &a, &b) == 2) {
-        if (!s_guest_base || b > (64u << 20) || (uint64_t)a + b > 0x100000000ull) { dbg_printf(fd, "ERR range\n"); return; }
-        if (dbg_printf(fd, "OK %u\n", b) == 0) dbg_send(fd, s_guest_base + a, b);
-        return;
-    } else if (sscanf(cmd, "ls %u %x %x", &a, &b, &c) == 3) {
-        extern const uint8_t* spu_ctx_ls(int);
-        const uint8_t* ls = spu_ctx_ls((int)a);
-        if (!ls || b >= 0x40000u || c > 0x40000u - b) { dbg_printf(fd, "ERR no such context or range\n"); return; }
-        dbg_hex(fd, ls + b, b, c);
-    } else if (!strcmp(cmd, "shot")) {
-        extern int g_vk_dump_now;
-        g_vk_dump_now = 1;
-        dbg_printf(fd, "OK the next present writes logs/shot.NNN.ppm\n");
-    } else if (!strcmp(cmd, "prof")) {
-        prof_report();
-        fflush(stdout);
-        dbg_printf(fd, "OK in the log\n");
-    } else if (!strcmp(cmd, "flush")) {
-        fflush(stdout); fflush(stderr); fsync(s_log_fd);
-        dbg_printf(fd, "OK\n");
-    } else if (!strncmp(cmd, "pad ", 4)) {
-        /* pad <mask> [polls] [lx ly rx ry]: mask as PAD_SCRIPT (DIGITAL2 << 8 | DIGITAL1); sticks
-         * 0..255, -1 leaves one alone (tools/patch_devpad.py) */
-        extern void ps3_devpad_press(unsigned, int, int, int, int, int);
-        unsigned m = 0; int polls = 6, lx = -1, ly = -1, rx = -1, ry = -1;
-        if (sscanf(cmd + 4, "%x %d %d %d %d %d", &m, &polls, &lx, &ly, &rx, &ry) < 1) { dbg_printf(fd, "ERR pad <mask> [polls] [lx ly rx ry]\n"); return; }
-        ps3_devpad_press(m, polls, lx, ly, rx, ry);
-        dbg_printf(fd, "OK\n");
-    } else if (!strncmp(cmd, "rec", 3) || !strncmp(cmd, "play", 4)) {
-        /* rec <file> | rec off ; play <file> | play off (files under the game's logs folder) */
-        extern int ps3_devpad_record(const char*);
-        extern int ps3_devpad_replay(const char*);
-        const int rec = cmd[0] == 'r';
-        const char* arg = cmd + (rec ? 3 : 4);
-        while (*arg == ' ') arg++;
-        char path[400] = "";
-        if (*arg && strcmp(arg, "off")) {
-            if (strchr(arg, '/') || strstr(arg, "..")) { dbg_printf(fd, "ERR a plain file name\n"); return; }
-            snprintf(path, sizeof path, "%s/logs/%s", s_root, arg);
-        }
-        const int r = rec ? ps3_devpad_record(path[0] ? path : NULL) : ps3_devpad_replay(path[0] ? path : NULL);
-        dbg_printf(fd, r ? "ERR cannot open %s\n" : "OK %s\n", path[0] ? path : "off");
-        if (r) return;
-    } else {
-        dbg_printf(fd, "ERR commands: ping threads regs spuregs mem rmem ls shot prof flush pad rec play\n");
-        return;
-    }
-    dbg_printf(fd, ".\n");   /* end of the reply */
-}
-static void* dbg_server(void* arg)
-{
-    const int port = (int)(intptr_t)arg;
-    const int s = socket(AF_INET, SOCK_STREAM, 0);
-    if (s < 0) { printf("[ps5] debug server: socket failed (%d)\n", errno); return NULL; }
-    int one = 1;
-    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-    struct sockaddr_in sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sin_len = sizeof sa;
-    sa.sin_family = AF_INET;
-    sa.sin_port = (uint16_t)(((port & 0xFF) << 8) | ((port >> 8) & 0xFF));   /* network order */
-    sa.sin_addr.s_addr = 0;                                                 /* any address */
-    if (bind(s, (struct sockaddr*)&sa, sizeof sa) != 0 || listen(s, 2) != 0) {
-        printf("[ps5] debug server: bind/listen on port %d failed (%d)\n", port, errno);
-        close(s);
-        return NULL;
-    }
-    printf("[ps5] debug server listening on port %d\n", port);
-    for (;;) {
-        const int c = accept(s, NULL, NULL);
-        if (c < 0) { sleep(1); continue; }
-        char buf[512];
-        size_t have = 0;
-        for (;;) {
-            const ssize_t r = recv(c, buf + have, sizeof buf - 1 - have, 0);
-            if (r <= 0) break;
-            have += (size_t)r;
-            buf[have] = 0;
-            char* nl;
-            while ((nl = strchr(buf, '\n'))) {
-                *nl = 0;
-                if (nl > buf && nl[-1] == '\r') nl[-1] = 0;
-                if (!strcmp(buf, "quit")) { have = 0; goto done; }
-                dbg_command(c, buf);
-                have -= (size_t)(nl + 1 - buf);
-                memmove(buf, nl + 1, have + 1);
-            }
-            if (have >= sizeof buf - 1) have = 0;   /* an over-long line: drop it */
-        }
-    done:
-        close(c);
-    }
-    return NULL;
-}
 
 /* Status line every 15 s: uptime and the memory budgets that are the likeliest to run out. The frame
  * rate is in the renderer's own "[rsx fps]" lines, the controller in PAD_TRACE's. The log is also
@@ -1126,7 +967,11 @@ static int s_dlc = 1;   /* launcher DLC COSTUMES (ini dlc): the DLC unlock files
 static void apply_launcher_settings(void)
 {
     FILE* f = fopen(APP "/launcher.ini", "r");
-    char line[256], lang[16] = "";
+    char lang[16] = "";
+    /* MODS page (launcher.c, 2026-11-13): mods = / gameplay_patches = / cheats = id,id,... (ids: letters, digits, _ - .),
+     * long lines: up to the launcher's MD_LIST (12288) */
+    static char line[12288 + 64], md_mods[12288], md_gp[12288], md_ch[12288];
+    int lt_live = 0, lt_seen = 0, online = 0; char online_name[24] = "";   /* mods2 (2026-11-13): launcher keys lightning_live / online / online_name */
     /* The defaults = the launcher's first-run ones (launcher.c RELEASE_DEFAULTS, 2026-11-11): diagnostics 0,
      * fps_counter 0, no movie skipped. They stand for a key the file hasn't and for no file at all (was: no
      * file = nothing applied, so the profilers and diagnostic logging ran). Rule: profilers / ftrace / frame
@@ -1134,8 +979,26 @@ static void apply_launcher_settings(void)
     int skip_intro = 0, skip_movies = 0, gpu = 1, diag = 0, fps = 0, fg = 0, ups = 1, look = 0, aa = 1, aniso = 16, ds = 1, sharp = 0;   /* ds: DualSense extras (quick menu) */   /* look: vk look 0/1/2 */   /* ups: upscaler, 1 FSR 1 / 0 bilinear */   /* fg: frame generation (off: ghosting at 25 fps, 2026-11-07) */   /* fps: the counter, 0 off / 1 simple / 2 detailed */
     while (f && fgets(line, sizeof line, f)) {
         char key[64]; int v = 0; char sv[32];
+        {   /* the MODS page's id lists (whole line, "key = a,b,c") */
+            const char* s = line;
+            while (*s == ' ' || *s == '\t') s++;
+            char* dst = !strncmp(s, "mods", 4) && (s[4] == ' ' || s[4] == '=') ? md_mods
+                      : !strncmp(s, "gameplay_patches", 16) && (s[16] == ' ' || s[16] == '=') ? md_gp
+                      : !strncmp(s, "cheats", 6) && (s[6] == ' ' || s[6] == '=') ? md_ch : NULL;
+            if (dst) {
+                s = strchr(s, '=');
+                s = s ? s + 1 : "";
+                while (*s == ' ' || *s == '\t') s++;
+                snprintf(dst, sizeof md_mods, "%s", s);
+                dst[strcspn(dst, " \t\r\n")] = 0;
+                continue;
+            }
+        }
+        if (sscanf(line, " online_name = %16[A-Za-z0-9_-]", online_name) == 1) continue;
         if (sscanf(line, " %63[a-z_] = %d", key, &v) == 2) {
             if (!strcmp(key, "skip_intro")) skip_intro = v;
+            else if (!strcmp(key, "lightning_live")) { lt_live = v == 1; lt_seen = 1; }
+            else if (!strcmp(key, "online")) online = v == 1;
             else if (!strcmp(key, "skip_movies")) skip_movies = v;
             else if (!strcmp(key, "gpu_effects")) gpu = v;
             else if (!strcmp(key, "diagnostics")) diag = v;
@@ -1155,7 +1018,6 @@ static void apply_launcher_settings(void)
     if (f) fclose(f);
     printf("[ps5] launcher.ini%s: skip_intro=%d skip_movies=%d gpu_effects=%d diagnostics=%d fps_counter=%d language=%s\n",
            f ? "" : " (none: defaults)", skip_intro, skip_movies, gpu, diag, fps, lang[0] ? lang : "(default)");
-    if (!diag) env_default("PS5_DEBUG_PORT", "0");   /* release: no LAN debug server unless diagnostics = 1 or env.txt sets it */
     { char v[4]; snprintf(v, sizeof v, "%d", fps); env_default("PS3_FPS_COUNTER", v); }   /* vk overlay (libs/video/vk_overlay.inc) */
     env_default("PS3_FRAMEGEN", fg ? "1" : "0");   /* vk framegen (libs/video/vk_framegen.cpp, MihawkGen) */
     printf("[ps5] frame generation %s (launcher), PS3_FRAMEGEN=%s in effect\n", fg ? "on" : "off", getenv("PS3_FRAMEGEN") ? getenv("PS3_FRAMEGEN") : "?");
@@ -1169,6 +1031,28 @@ static void apply_launcher_settings(void)
     if (skip_movies) env_default("PS3_SKIP_MOVIES", "all");
     else if (skip_intro) env_default("PS3_SKIP_MOVIES", "intro");
     if (lang[0]) env_default("PS3_LANG", lang);
+    /* MODS (launcher MODS page): this game's texture mods (folders in <game>/mods/, the lightning colour first, then by
+     * priority), gameplay patches (tools/gpatch: PS3_GPATCH) and cheats (tools/gpatch tables: PS3_CHEATS).
+     * env.txt still wins (env_default): keep these out of a console env.txt (DONTFLIP). */
+    env_default("PS3_MODS_DIR", rootp("/mods"));
+    if (md_mods[0]) env_default("PS3_MODS", md_mods);
+    if (md_gp[0]) env_default("PS3_GPATCH", md_gp);
+    if (md_ch[0]) env_default("PS3_CHEATS", md_ch);
+    if (md_mods[0] || md_gp[0] || md_ch[0]) printf("[ps5] mods (launcher): mods=%s gameplay_patches=%s cheats=%s\n", md_mods, md_gp, md_ch);
+    /* Live lightning colour (libs/video/rsx_lightning.inc: the quick menu's LIGHTNING colour wheel): only when the launcher
+     * says no file colour pack is on (lightning_live = 1); the colour itself is lightning_hue in launcher_<game>.ini. */
+    if (lt_live) env_default("PS3_LIGHTNING_LIVE", "1");
+    /* (2026-11-14) a lightning colour pack is on, so the wheel is off: the quick menu still shows its LIGHTNING row
+     * and says where to turn the pack off (it was simply missing: console test) */
+    else if (lt_seen) env_default("PS3_LIGHTNING_PACK", "1");
+    /* Community missions server (inFAMOUS 2 / Festival of Blood only; launcher MODS page ONLINE, off by default, with a
+     * notice). Never PS3_UGC_PLAIN / PS3_UGC_BODYLOG / PS3_UGC_HOSTDBG here. */
+    const int ugc_game = strcmp(PS5_GAME_DIR, "if1") != 0;   /* (G_IF2FAM: if2 + fob) */
+    if (ugc_game && online && strlen(online_name) >= 3) {
+        env_default("PS3_NET_ONLINE", "1"); env_default("PS3_UGC_ONLINE", "1");
+        env_default("PS3_UGC_SERVER", "152.53.194.56"); env_default("PS3_UGC_NAME", online_name);
+    }
+    printf("[ps5] mods2 (launcher): lightning_live=%d online=%d\n", lt_live, ugc_game && online && strlen(online_name) >= 3);
     if (!gpu) { env_default("PS3RECOMP_ENG_GPU_LIGHT", ""); env_default("PS3RECOMP_ENG_GPU_SSAO", ""); }
     if (!diag) { env_default("PS3_FTRACE", ""); env_default("PS3RECOMP_VK_DUMP", "");
                  env_default("PS5_WAITPROF", "0"); env_default("PS5_PROFILE", "0"); }   /* release: no wait/SIGPROF profilers (2026-11-10 audit) */
@@ -1244,7 +1128,6 @@ void ps5_app_setup(int* argc, char*** argv)
     {   struct stat st;
         if (stat(APP "/" PS5_GAME_DIR "/game", &st) == 0) snprintf(s_root, sizeof s_root, APP "/" PS5_GAME_DIR); }
     mkdir(rootp("/logs"), 0777);
-    snprintf(s_dbg_dump, sizeof s_dbg_dump, "%s/logs/dbg_dump.txt", s_root);
     /* The log is named after the game: infamous.log, infamous2.log, infamousfob.log (from the build's
      * game, or in a single-game app the title id in sce_sys/param.json); the previous run's is kept
      * as <name>.prev.log. Both streams append: with stdout opened "w" it wrote at its own offset,
@@ -1409,14 +1292,14 @@ void ps5_app_setup(int* argc, char*** argv)
      * callers; RPCS3 itself warns "Lightning sounds might be distorted") = the user's distortion on explosions/lightning.
      * Off now that the game has 13 threads: audio SPUs 13+7% -> 35+16% of a core, if1 29.9 -> 28.9 fps on the BC-250.
      * PS3_IF1_AUDIO_PATCH=1 in env.txt = the patch again. */
-    if (G_IF1) env_default("PS3_IF1_AUDIO_PATCH", "1");
+    if (G_IF1) env_default("PS3_IF1_AUDIO_PATCH", "1");   /* 2026-11-15: back ON (user: audio slowdown with it off since the 11-12 build; console test with it on = working) */
     /* vk stencil (2026-11-11): a real stencil plane for the engine's depth targets. inFAMOUS 2 / Festival of Blood tag
      * characters with stencil bit 0x80 and use it for the character shadow bias, the ambient term (x1.0 characters,
      * x0.35 world) and to clip per-character effects to the silhouette. Without it: faceted blue self-shadow and the
      * "black box" around shocked enemies / staked vampires / everyone in vampire vision (user footage I2PS5.mp4 2:34,
      * 11:48). inFAMOUS 1 is NOT given it (unverified there). PS3_VK_STENCIL=0 in env.txt = the old picture. */
     if (G_IF2FAM) env_default("PS3_VK_STENCIL", "1");
-    /* if1 stencil (2026-11-11, agent_vpconf + BC A/B): inFAMOUS 1 tags its G-buffer with a 3-bit stencil ID (write mask
+    /* if1 stencil (2026-11-11, vpconf notes + BC A/B): inFAMOUS 1 tags its G-buffer with a 3-bit stencil ID (write mask
      * 0x07) and rewrites the colour target's alpha under stencil NOTEQUAL ref 4 mask 4; without a stencil plane the tagged
      * pixels (Cole) lost that alpha = the "Cole is darker/greyer" the user reported. BC: jacket/skin clearly brighter
      * (work/dbg/if1_cole.png), fps 30.4 vs 30.0 (stA/stB x2, no cost). Tag bits are 0x07 here, not if2's 0xE0.
@@ -1437,7 +1320,7 @@ void ps5_app_setup(int* argc, char*** argv)
      * depth test and REPLACE the character stencil class with 0 = dark bands on Cole's neck and dark blocks on his jacket
      * in close-ups (clean on a PS3; present since t33). A biased overlay is now drawn only where the class bits are
      * already 0 (world), so rails/streets keep the flicker fix. PS3RECOMP_ENG_OVERLAY_BIAS_CLASS0=0 in env.txt = t34. */
-    /* =2 (t35b, review agent_c0review): only the character bit 0x80 rejects the overlay; world surfaces with other class
+    /* =2 (t35b, review c0review notes): only the character bit 0x80 rejects the overlay; world surfaces with other class
      * bits (0x20 on ordinary world materials in gameplay) keep their decals/rails/trims as on the PS3. =1 = any class bit. */
     if (G_IF2FAM) env_default("PS3RECOMP_ENG_OVERLAY_BIAS_CLASS0", "2");
     /* t34 RSX-thread work (2026-11-11): the console's fps limit is the RSX command thread (if2; close second in if1). All three
@@ -1501,7 +1384,7 @@ void ps5_app_setup(int* argc, char*** argv)
     if (G_IF1) env_default("PS3RECOMP_ENG_RMW_DIRECT", "2");
     if (G_IF2FAM) env_default("PS3RECOMP_ENG_RMW_DIRECT", "2");
     /* t37 (2026-11-12 console bisect on t35b, inFAMOUS 2 street, user with env.txt): RMW_DIRECT=2 made the trolley rails
-     * drop out (=0 fixed them). Cause (agent_railfix): the pvkCmdPipelineBarrier macro closes the open pass, so the
+     * drop out (=0 fixed them). Cause (railfix notes): the pvkCmdPipelineBarrier macro closes the open pass, so the
      * "in-pass" barrier ended it and the decal was drawn outside any render pass. PS3RECOMP_VK_RMW_INPASS=1 records the
      * barrier inside the pass (rsx_vulkan_backend.c "vk rmw inpass"; log "[RSX vulkan] engine: rmw inpass 1"). Fallback
      * if the rails still drop out: env.txt PS3RECOMP_ENG_RMW_DIRECT=0 (= the copies). DONTFLIP: RMW_DIRECT=2 without it. */
@@ -1527,7 +1410,7 @@ void ps5_app_setup(int* argc, char*** argv)
     if (G_IF1) env_default("PS3RECOMP_ENG_TEXHASH_ASYNC", "1");
     if (G_IF2FAM) env_default("PS3RECOMP_ENG_TEXHASH_ASYNC", "1");
     /* t37 (same bisect): TEXHASH_ASYNC=1 made the street manhole covers / crossing paint drop out for ~0.5 s (=0 fixed
-     * them). PS3RECOMP_ENG_TEXHASH_SAFE=1 (agent_thfix): no sparse-only "unchanged" once the full hash is due + 8 frames of
+     * them). PS3RECOMP_ENG_TEXHASH_SAFE=1 (thfix notes): no sparse-only "unchanged" once the full hash is due + 8 frames of
      * full hashes after each upload (log "[texhash safe] on: ..."). Fallback if they still drop out: env.txt
      * PS3RECOMP_ENG_TEXHASH_ASYNC=0. DONTFLIP: TEXHASH_ASYNC=1 without it. */
     if (G_IF2FAM) env_default("PS3RECOMP_ENG_TEXHASH_SAFE", "1");
@@ -1665,13 +1548,6 @@ void ps5_app_setup(int* argc, char*** argv)
     }
     pthread_t st;
     if (pthread_create(&st, NULL, status_thread, NULL) == 0) pthread_detach(st);
-    s_game_name = game;
-    s_t0 = time(NULL);
-    { const char* e = getenv("PS5_DEBUG_PORT");
-      const int port = e ? atoi(e) : 9990;
-      pthread_t dt;
-      if (port > 0 && port < 65536 && pthread_create(&dt, NULL, dbg_server, (void*)(intptr_t)port) == 0) pthread_detach(dt);
-      else if (port <= 0) printf("[ps5] debug server off (PS5_DEBUG_PORT=0, the default with diagnostics off; =9990 in env.txt turns it on)\n"); }
 
     static char elf[160];
     snprintf(elf, sizeof elf, "%s/game/PS3_GAME/USRDIR/EBOOT.elf", s_root);

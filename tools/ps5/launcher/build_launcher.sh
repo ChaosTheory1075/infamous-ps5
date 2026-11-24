@@ -20,9 +20,15 @@ stb=$HOME/cdbuild/fw-clean/glue/rexglue-sdk-main/thirdparty/stb   # BC-250: the 
 mp3=$HOME/cdbuild/fw-clean/glue/rexglue-sdk-main/gta4-recomp/src/ps5/hub
 tt=$HOME/if2/ps3recomp-fork/libs/font
 vkh=${IF_ROOT:-$HOME/inFamous}/deps/Vulkan-Headers/include
+# MODS catalog (launcher.c): MD_CATALOG_GAMES = a game mask, bit i = kDir[i] (1 if1, 2 if2, 4 fob; default 0 = none);
+# MD_CATALOG_HIDE = "id,id,..." never listed (default ""). Passed on from the environment when set.
+mdflags=()
+[ -n "${MD_CATALOG_GAMES:-}" ] && mdflags+=("-DMD_CATALOG_GAMES=$MD_CATALOG_GAMES")
+[ -n "${MD_CATALOG_HIDE:-}" ] && mdflags+=("-DMD_CATALOG_HIDE=\"$MD_CATALOG_HIDE\"")
+[ ${#mdflags[@]} -gt 0 ] && echo "==> launcher: ${mdflags[*]}"
 PS5_EMUTLS=1 sh $HOME/if2/ps5/ps5cc -O2 -fPIC -fno-visibility-from-dllstorageclass -Wno-unused-function \
     -ffile-prefix-map="$stb"=stb -ffile-prefix-map="$mp3"=hub -ffile-prefix-map="$tt"=font -ffile-prefix-map="$vkh"=vk -ffile-prefix-map="$src"=launcher \
-    -I"$stb" -I"$mp3" -I"$tt" -I"$vkh" -c "$src/launcher.c" -o "$stage/build/launcher.o"
+    -I"$stb" -I"$mp3" -I"$tt" -I"$vkh" ${mdflags[@]+"${mdflags[@]}"} -c "$src/launcher.c" -o "$stage/build/launcher.o"
 
 export PS5_CLANG=${PS5_CLANG:-/usr/bin/clang-18} LLVM_CONFIG=${LLVM_CONFIG:-/usr/bin/llvm-config-18}
 source "$tri/tools/radv-link.sh"

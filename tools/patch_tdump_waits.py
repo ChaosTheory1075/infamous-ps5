@@ -1,4 +1,4 @@
-# tdump waits: the guest thread dump (debug server `threads`, PS3_THREAD_DUMP) names what each guest
+# tdump waits: the guest thread dump (debugger `threads`, PS3_THREAD_DUMP) names what each guest
 # thread is blocked in. The dispatchers already kept the in-flight lv2 syscall number (g_sc_inflight)
 # and HLE import name (g_hle_inflight) per guest thread id; now the syscall's first arguments and
 # both start times are kept too, and the dump prints "in sys N(r3,r4,r5) 12.3 s" / "in <hle> 4.0 s".

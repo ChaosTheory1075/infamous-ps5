@@ -1,6 +1,6 @@
 /* inFamous: ReCharged (PS5) - the launcher: eboot.bin of the one app (PPSA95463) that holds all three
  * games, laid out as the other recomps' menus (Saints Row: ReInstated's). Shows the chosen game's art
- * and music; L1/R1 change the page (HOME, CONTENT, SETTINGS, CREDITS), Circle goes back to HOME; on
+ * and music; L1/R1 change the page (HOME, CONTENT, SAVES, TROPHIES, MODS, SETTINGS, CREDITS), Circle goes back to HOME; on
  * HOME up/down choose, Cross plays: the game's own program (/app0/if1.bin, if2.bin, fob.bin) is
  * started in this one's place (sceSystemServiceLoadExec), and it reads the settings this saves in
  * /app0/launcher.ini (ps5_app.c, apply_launcher_settings).
@@ -235,14 +235,127 @@ static const char* TI(const char* s)
     return c[i].out;
 }
 
+/* MODS' choices (the MODS page, below): per game, [0] mods (texture mods with the lightning colour first),
+ * [1] gameplay_patches, [2] cheats -- comma-separated ids in priority order, as launcher_<game>.ini keeps them
+ * (mods = id,id,... / gameplay_patches = ... / cheats = ...). launcher.ini gets the starting game's (ps5_app.c
+ * apply_launcher_settings: PS3_MODS_DIR, PS3_MODS, PS3_GPATCH, PS3_CHEATS). */
+enum { MD_LIST = 12288 };
+static char s_md_list[NGAMES][3][MD_LIST];
+static const char* const kMdKey[3] = { "mods", "gameplay_patches", "cheats" };
+static int s_rd_game = -1;   /* (settings_read: whose lists a file's are; -1: none, launcher.ini's are only a copy) */
+/* MODS page, more keys (2026-11-13, launch2), launcher_<game>.ini:
+ *   lightning_hue = n   the in-game colour wheel's colour (quick menu L3+R3 > LIGHTNING; the game writes this line):
+ *                       0..359 a hue, -1 the game's own (also when absent), -2 white. The launcher only shows it
+ *                       (LIGHTNING row) and writes it back as it read it. Not in launcher.ini.
+ *   lightning_live = 1  no file colour pack on for the game (the wheel works), 0 one is (LIGHTNING COLOUR selector).
+ *   online = 0|1        COMMUNITY MISSIONS SERVER (inFAMOUS 2 / Festival of Blood; inFAMOUS always 0), off by default.
+ *   online_name = name  the player name sent to it: letters, digits, _ -, 3..16 ("Player_" + 5 digits made when
+ *                       it is first turned on; a bad one is made again). Edited only in the file.
+ * lightning_live / online / online_name also go into launcher.ini for the starting game (ps5_app.c
+ * apply_launcher_settings: PS3_LIGHTNING_LIVE, PS3_UGC_*). Any other "key = value" line of a launcher_<game>.ini
+ * the launcher doesn't know is kept and written back after its own (s_ini_extra, MD_EXTRA bytes a game). */
+enum { MD_EXTRA = 2048, MD_NAME = 16 };
+static int s_lt_hue[NGAMES] = { -1, -1, -1 };
+static int s_online[NGAMES];
+static char s_online_name[NGAMES][MD_NAME + 8];
+static char s_ini_extra[NGAMES][MD_EXTRA];
+static int md_fwd_ok(int g, int k, const char* id);   /* (MODS, below: a gameplay patch / cheat the game may get) */
+static int md_lt_live(int g);                          /* (MODS, below: 1 no colour pack on) */
+static int md_name_ok(const char* s)
+{
+    size_t n = 0;
+    for (; s[n]; n++) if (!((s[n] >= 'a' && s[n] <= 'z') || (s[n] >= 'A' && s[n] <= 'Z') || (s[n] >= '0' && s[n] <= '9') || s[n] == '_' || s[n] == '-')) return 0;
+    return n >= 3 && n <= MD_NAME;
+}
+static void md_name_rand(char* out, size_t n)   /* "Player_" + 5 digits */
+{
+    static unsigned ctr;
+    uint32_t r = 0;
+    FILE* f = fopen("/dev/urandom", "rb");
+    if (!f || fread(&r, 1, sizeof r, f) != sizeof r) r = ((uint32_t)time(NULL) ^ (++ctr * 0x9E3779B9u)) * 2654435761u;
+    if (f) fclose(f);
+    snprintf(out, n, "Player_%05u", (unsigned)(r % 100000u));
+}
+/* The player name is the console's, not a game's (2026-11-13, name editor): inFAMOUS 2 and Festival of Blood share
+ * it; when only one of the two files has a usable one, the other takes it. */
+static void md_name_share(void)
+{
+    if (!md_name_ok(s_online_name[1]) && md_name_ok(s_online_name[2])) snprintf(s_online_name[1], sizeof s_online_name[1], "%s", s_online_name[2]);
+    if (!md_name_ok(s_online_name[2]) && md_name_ok(s_online_name[1])) snprintf(s_online_name[2], sizeof s_online_name[2], "%s", s_online_name[1]);
+}
+/* g (1 / 2) has a name: the other game's, or a new Player_NNNNN for both */
+static void md_name_new(int g)
+{
+    md_name_share();
+    if (md_name_ok(s_online_name[g])) return;
+    md_name_rand(s_online_name[g], sizeof s_online_name[g]);
+    logf_("%s: online player name %s made\n", kDir[g], s_online_name[g]);
+    md_name_share();
+}
+/* the keys the launcher reads or writes (any other line of a game's file is kept as it is) */
+static int ini_key_known(const char* k)
+{
+    static const char* const kk[] = { "game", "skip_intro", "skip_movies", "language", "gpu_effects", "diagnostics", "fps_counter",
+        "frame_generation", "upscaler", "look", "anti_aliasing", "aniso", "sharpness", "dualsense", "dlc", "settings_version",
+        "menu_music", "menu_effects", "mods", "gameplay_patches", "cheats", "lightning_hue", "lightning_live", "online", "online_name" };
+    for (size_t i = 0; i < sizeof kk / sizeof kk[0]; i++) if (!strcmp(kk[i], k)) return 1;
+    return 0;
+}
+/* "= a,b , c\n" -> "a,b,c" (ids: letters, digits, _ - .; anything else dropped) */
+static void md_list_set(char* out, const char* s)
+{
+    size_t k = 0;
+    while (*s == ' ' || *s == '\t' || *s == '=') s++;
+    for (; *s && *s != '\n' && *s != '\r' && k + 1 < MD_LIST; s++) {
+        const char c = *s;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.') out[k++] = c;
+        else if (c == ',' && k && out[k - 1] != ',') out[k++] = ',';
+    }
+    while (k && out[k - 1] == ',') k--;
+    out[k] = 0;
+}
+
 /* One file's lines into a game's settings (and the menu's, from launcher.ini); 0: no file. */
 static int settings_read(const char* path, gset_t* g, int menu)
 {
     FILE* f = fopen(path, "r");
     if (!f) return 0;
-    char line[256];
+    static char line[MD_LIST + 64];   /* (MODS' id lists are long lines) */
     while (fgets(line, sizeof line, f)) {
         char key[64], sv[32]; int v;
+        if (!strchr(line, '\n')) { char rest[256]; while (fgets(rest, sizeof rest, f) && !strchr(rest, '\n')) {} }   /* (longer still: the rest dropped) */
+        if (s_rd_game >= 0) {   /* MODS: mods / gameplay_patches / cheats = id,id,... */
+            const char* s = line;
+            while (*s == ' ' || *s == '\t') s++;
+            int k = 0;
+            for (; k < 3; k++) { const size_t n = strlen(kMdKey[k]); if (!strncmp(s, kMdKey[k], n) && (s[n] == ' ' || s[n] == '=' || s[n] == '\t')) break; }
+            if (k < 3) { md_list_set(s_md_list[s_rd_game][k], s + strlen(kMdKey[k])); continue; }
+            /* the line's key (letters, digits, _ . -, then "="): online_name read here, one the launcher doesn't know kept */
+            char ik[64]; size_t n = 0;
+            const char* e = s;
+            while (n + 1 < sizeof ik && ((*e >= 'a' && *e <= 'z') || (*e >= 'A' && *e <= 'Z') || (*e >= '0' && *e <= '9') || *e == '_' || *e == '.' || *e == '-')) ik[n++] = *e++;
+            ik[n] = 0;
+            while (*e == ' ' || *e == '\t') e++;
+            if (n && *e == '=') {
+                if (!strcmp(ik, "online_name")) {
+                    char nm[64]; size_t q = 0;
+                    for (e++; *e == ' ' || *e == '\t'; e++) {}
+                    while (*e && *e != '\r' && *e != '\n' && q + 1 < sizeof nm) nm[q++] = *e++;   /* (the whole value: "a b" is no name) */
+                    while (q && (nm[q - 1] == ' ' || nm[q - 1] == '\t')) q--;
+                    nm[q] = 0;
+                    if (md_name_ok(nm)) snprintf(s_online_name[s_rd_game], sizeof s_online_name[0], "%s", nm);
+                    else { s_online_name[s_rd_game][0] = 0; if (q) logf_("%s: online_name '%.20s' isn't a name (letters, digits, _ -, 3 to %d): a new one when online is on\n", kDir[s_rd_game], nm, MD_NAME); }
+                    continue;
+                }
+                if (!ini_key_known(ik)) {
+                    char* x = s_ini_extra[s_rd_game];
+                    const size_t xl = strlen(x), ll = strcspn(s, "\r\n");
+                    if (xl + ll + 2 <= MD_EXTRA) { memcpy(x + xl, s, ll); x[xl + ll] = '\n'; x[xl + ll + 1] = 0; }
+                    else logf_("%s: no room to keep the line '%.40s' (dropped)\n", kDir[s_rd_game], s);
+                    continue;
+                }
+            }
+        }
         if (sscanf(line, " language = %31s", sv) == 1) {
             if (!strcmp(sv, "auto")) g->lang = LANG_AUTO;
             for (int i = 0; i < NLANG; i++) if (!strcmp(sv, kLangCode[i])) g->lang = i;
@@ -263,6 +376,8 @@ static int settings_read(const char* path, gset_t* g, int menu)
         else if (!strcmp(key, "dualsense")) g->no_ds = !v;
         else if (!strcmp(key, "dlc")) g->no_dlc = !v;
         else if (!strcmp(key, "settings_version")) g->ver = v;
+        else if (s_rd_game >= 0 && !strcmp(key, "lightning_hue")) s_lt_hue[s_rd_game] = v >= -2 && v <= 359 ? v : -1;
+        else if (s_rd_game >= 0 && !strcmp(key, "online")) s_online[s_rd_game] = s_rd_game != 0 && v == 1;
         else if (menu && !strcmp(key, "game") && v >= 0 && v < NGAMES) S.game = v;
         else if (menu && !strcmp(key, "menu_music")) S.music = v < 0 ? 0 : v > 100 ? 100 : v;
         else if (menu && !strcmp(key, "menu_effects")) S.fx = !!v;
@@ -280,7 +395,12 @@ static void settings_load(void)
         snprintf(p, sizeof p, APP "/launcher_%s.ini", kDir[i]);
         G[i] = kRecommended[i];
         /* (none yet: the shared launcher.ini of before, for every game) */
-        if (!settings_read(p, &G[i], 0) && have) G[i] = last;
+        s_rd_game = i;
+        s_ini_extra[i][0] = 0; s_lt_hue[i] = -1; s_online[i] = 0; s_online_name[i][0] = 0;
+        const int had = settings_read(p, &G[i], 0);
+        s_rd_game = -1;
+        if (!had && have) G[i] = last;
+        if (i == NGAMES - 1) { md_name_share(); for (int q = 1; q < NGAMES; q++) if (s_online[q] && !md_name_ok(s_online_name[q])) md_name_new(q); }   /* (on, with no usable name: a new one) */
         if (G[i].ver < SETTINGS_VERSION && G[i].diagnostics) { G[i].diagnostics = 0; logf_("%s: diagnostics off (settings of an older launcher)\n", kDir[i]); }
     }
 }
@@ -295,7 +415,38 @@ static void settings_write(const char* path, const gset_t* g, int menu)
             g->skip_intro, g->skip_movies, !menu && g->lang == LANG_AUTO ? "auto" : kLangCode[lang_of(g)],
             g->gpu_effects, g->diagnostics, g->fps_counter, g->framegen, !g->no_fsr, g->look, g->no_aa ? 0 : g->smaa ? 2 : 1, g->no_aniso ? 0 : 16 >> g->aniso_dn, g->sharp, !g->no_ds, !g->no_dlc);
     if (menu) fprintf(f, "menu_music = %d\nmenu_effects = %d\n", S.music, S.fx);
+    {   /* MODS: this game's lists (launcher.ini: the starting game's) */
+        const int gi = g >= G && g < G + NGAMES ? (int)(g - G) : -1;
+        for (int k = 0; gi >= 0 && k < 3; k++) {
+            if (!menu || !k) { fprintf(f, "%s = %s\n", kMdKey[k], s_md_list[gi][k]); continue; }
+            /* launcher.ini: only the patches / cheats the MODS page lists (MD_CATALOG_GAMES / MD_CATALOG_HIDE): a
+             * hidden one stays in launcher_<game>.ini but never reaches the game */
+            static char fw[MD_LIST];
+            size_t n = 0; fw[0] = 0;
+            for (const char* s = s_md_list[gi][k]; *s;) {
+                char id[64]; int q = 0;
+                while (*s && *s != ',') { if (q < 63) id[q++] = *s; s++; }
+                id[q] = 0;
+                if (*s) s++;
+                if (!id[0]) continue;
+                if (!md_fwd_ok(gi, k, id)) { logf_("%s: %s %s not passed on (not listed: MD_CATALOG_GAMES / MD_CATALOG_HIDE)\n", kDir[gi], kMdKey[k], id); continue; }
+                if (n + (size_t)q + 2 > sizeof fw) break;
+                if (n) fw[n++] = ',';
+                memcpy(fw + n, id, (size_t)q + 1); n += (size_t)q;
+            }
+            fprintf(f, "%s = %s\n", kMdKey[k], fw);
+        }
+        if (gi >= 0) {   /* (launch2) the live lightning colour and the community server; launcher.ini: the starting game's */
+            if (!menu) fprintf(f, "lightning_hue = %d\n", s_lt_hue[gi]);
+            fprintf(f, "lightning_live = %d\nonline = %d\n", md_lt_live(gi), gi != 0 && s_online[gi]);
+            if (gi != 0 && s_online_name[gi][0]) fprintf(f, "online_name = %s\n", s_online_name[gi]);
+        }
+    }
     fprintf(f, "settings_version = %d\n", SETTINGS_VERSION);
+    {   /* a game's own file: the lines it had that the launcher doesn't know, as they were */
+        const int gi = g >= G && g < G + NGAMES ? (int)(g - G) : -1;
+        if (!menu && gi >= 0 && s_ini_extra[gi][0]) fwrite(s_ini_extra[gi], 1, strlen(s_ini_extra[gi]), f);
+    }
     fclose(f);
 }
 
@@ -902,27 +1053,30 @@ static void vk_present(void)
 #define C_DIM 0x5A5854
 #define C_TEXT 0xCDCAC4
 #define C_ACCENT 0x38BDFF   /* inFamous's: Cole's lightning blue */
-enum { P_HOME, P_CONTENT, P_SAVES, P_TROPHIES, P_SETTINGS, P_CREDITS, NPAGES };
+enum { P_HOME, P_CONTENT, P_SAVES, P_TROPHIES, P_MODS, P_SETTINGS, P_CREDITS, NPAGES };
+static int md_light_row(void);
+static int md_ne_open(void);
+static void md_ne_input(uint32_t p);
 static const char* page_name(int i)
 {
-    /* HOME CONTENT SAVES TROPHIES SETTINGS CREDITS in each kLangCode language (en-gb = en) */
+    /* HOME CONTENT SAVES TROPHIES MODS SETTINGS CREDITS in each kLangCode language (en-gb = en) */
     static const char* const n[16][NPAGES] = {
-        { "HOME", "CONTENT", "SAVES", "TROPHIES", "SETTINGS", "CREDITS" },
-        { "ACCUEIL", "CONTENU", "SAUVEGARDES", "TROPHÉES", "PARAMÈTRES", "CRÉDITS" },
-        { "INICIO", "CONTENIDO", "PARTIDAS", "TROFEOS", "AJUSTES", "CRÉDITOS" },
-        { "START", "INHALTE", "SPIELSTÄNDE", "TROPHÄEN", "EINSTELLUNGEN", "MITWIRKENDE" },
-        { "HOME", "CONTENUTI", "SALVATAGGI", "TROFEI", "IMPOSTAZIONI", "RICONOSCIMENTI" },
-        { "START", "INHOUD", "OPSLAGEN", "TROFEEËN", "INSTELLINGEN", "MAKERS" },
-        { "INÍCIO", "CONTEÚDO", "SAVES", "TROFÉUS", "AJUSTES", "CRÉDITOS" },
-        { "ГЛАВНАЯ", "КОНТЕНТ", "СОХРАНЕНИЯ", "ПРИЗЫ", "НАСТРОЙКИ", "АВТОРЫ" },
-        { "START", "ZAWARTOŚĆ", "ZAPISY", "TROFEA", "USTAWIENIA", "TWÓRCY" },
-        { "HOME", "CONTENT", "SAVES", "TROPHIES", "SETTINGS", "CREDITS" },
-        { "INICIO", "CONTENIDO", "PARTIDAS", "TROFEOS", "AJUSTES", "CRÉDITOS" },
-        { "INÍCIO", "CONTEÚDO", "JOGOS GUARDADOS", "TROFÉUS", "DEFINIÇÕES", "CRÉDITOS" },
-        { "ホーム", "コンテンツ", "セーブ", "トロフィー", "設定", "クレジット" },
-        { "홈", "콘텐츠", "세이브", "트로피", "설정", "크레딧" },
-        { "首頁", "內容", "存檔", "獎盃", "設定", "製作人員" },
-        { "ANA SAYFA", "İÇERİK", "KAYITLAR", "KUPALAR", "AYARLAR", "EMEĞİ GEÇENLER" } };
+        { "HOME", "CONTENT", "SAVES", "TROPHIES", "MODS", "SETTINGS", "CREDITS" },
+        { "ACCUEIL", "CONTENU", "SAUVEGARDES", "TROPHÉES", "MODS", "PARAMÈTRES", "CRÉDITS" },
+        { "INICIO", "CONTENIDO", "PARTIDAS", "TROFEOS", "MODS", "AJUSTES", "CRÉDITOS" },
+        { "START", "INHALTE", "SPIELSTÄNDE", "TROPHÄEN", "MODS", "EINSTELLUNGEN", "MITWIRKENDE" },
+        { "HOME", "CONTENUTI", "SALVATAGGI", "TROFEI", "MOD", "IMPOSTAZIONI", "RICONOSCIMENTI" },
+        { "START", "INHOUD", "OPSLAGEN", "TROFEEËN", "MODS", "INSTELLINGEN", "MAKERS" },
+        { "INÍCIO", "CONTEÚDO", "SAVES", "TROFÉUS", "MODS", "AJUSTES", "CRÉDITOS" },
+        { "ГЛАВНАЯ", "КОНТЕНТ", "СОХРАНЕНИЯ", "ПРИЗЫ", "МОДЫ", "НАСТРОЙКИ", "АВТОРЫ" },
+        { "START", "ZAWARTOŚĆ", "ZAPISY", "TROFEA", "MODY", "USTAWIENIA", "TWÓRCY" },
+        { "HOME", "CONTENT", "SAVES", "TROPHIES", "MODS", "SETTINGS", "CREDITS" },
+        { "INICIO", "CONTENIDO", "PARTIDAS", "TROFEOS", "MODS", "AJUSTES", "CRÉDITOS" },
+        { "INÍCIO", "CONTEÚDO", "JOGOS GUARDADOS", "TROFÉUS", "MODS", "DEFINIÇÕES", "CRÉDITOS" },
+        { "ホーム", "コンテンツ", "セーブ", "トロフィー", "MOD", "設定", "クレジット" },
+        { "홈", "콘텐츠", "세이브", "트로피", "모드", "설정", "크레딧" },
+        { "首頁", "內容", "存檔", "獎盃", "模組", "設定", "製作人員" },
+        { "ANA SAYFA", "İÇERİK", "KAYITLAR", "KUPALAR", "MODLAR", "AYARLAR", "EMEĞİ GEÇENLER" } };
     return n[s_ml >= 0 && s_ml < 16 ? s_ml : 0][i];
 }
 enum { R_GPU, R_UPS, R_SHARP, R_AA, R_ANISO, R_LOOK, R_FG, R_FPS, R_LANG, R_SKIP_INTRO, R_SKIP_MOVIES, R_DLC, R_MUSIC, R_FX, R_DIAG, NROWS };
@@ -1094,6 +1248,12 @@ static void draw_footer(void)
                                 "ESQ DIR  JOGO      CIMA BAIXO  BACKUP      QUADRADO  GUARDAR AGORA      X 2X  RESTAURAR      TRIÂNGULO 2X  APAGAR      L1 R1  PÁGINAS")
         : M.page == P_CONTENT ? T("UP DOWN  GAME      X  INSTALL      TRIANGLE TWICE  UNINSTALL      SQUARE  LOOK AGAIN      O  BACK      L1 R1  PAGES",
                                   "CIMA BAIXO  JOGO      X  INSTALAR      TRIÂNGULO 2X  DESINSTALAR      QUADRADO  PROCURAR      O  VOLTAR      L1 R1  PÁGINAS")
+        : M.page == P_MODS && md_ne_open() ? T("D-PAD  MOVE      X  ADD      SQUARE  DELETE      TRIANGLE  SAVE      O  CANCEL",
+                                               "DIRECIONAL  MOVER      X  ADICIONAR      QUADRADO  APAGAR      TRIÂNGULO  SALVAR      O  CANCELAR")
+        : M.page == P_MODS && md_light_row() ? T("LEFT RIGHT  GAME      UP DOWN  MOVE      X  NEXT COLOUR      TRIANGLE  PREVIOUS COLOUR      SQUARE TWICE  ALL OFF      L1 R1  PAGES",
+                                                 "ESQ DIR  JOGO      CIMA BAIXO  MOVER      X  PRÓXIMA COR      TRIÂNGULO  COR ANTERIOR      QUADRADO 2X  DESLIGAR TUDO      L1 R1  PÁGINAS")
+        : M.page == P_MODS ? T("LEFT RIGHT  GAME      UP DOWN  MOVE      X  ON/OFF      SQUARE TWICE  ALL OFF      O  BACK      L1 R1  PAGES",
+                               "ESQ DIR  JOGO      CIMA BAIXO  MOVER      X  LIGA/DESLIGA      QUADRADO 2X  DESLIGAR TUDO      O  VOLTAR      L1 R1  PÁGINAS")
         : M.page == P_SETTINGS && !M.in_list ? T("UP DOWN  GAME      X  SETTINGS      SQUARE  RECOMMENDED      O  BACK      L1 R1  PAGES", "CIMA BAIXO  JOGO      X  AJUSTES      QUADRADO  RECOMENDADO      O  VOLTAR      L1 R1  PÁGINAS")
         : M.page == P_SETTINGS ? T("UP DOWN  MOVE      LEFT RIGHT  CHANGE      SQUARE  RECOMMENDED      O  GAMES      L1 R1  PAGES", "CIMA BAIXO  MOVER      ESQUERDA DIREITA  MUDAR      QUADRADO  RECOMENDADO      O  JOGOS      L1 R1  "
                                    "PÁGINAS")
@@ -1880,6 +2040,1346 @@ static void draw_credits(void)
     unclip();
 }
 
+/* ---- MODS (2026-11-13): per game, between TROPHIES and SETTINGS. Three kinds of things to turn on:
+ *  - texture mods, folders in <app>/<game>/mods/<id>/ (mod.json + the pack files): read here only for what the list
+ *    shows (name, author, category, conflicts_with, status, notes, edition, swatch). inFAMOUS: only the installed
+ *    edition's (installed.txt BCES00220 = eu, BCUS98119 = usa);
+ *  - gameplay patches and cheats: kModCat, compiled in (generated from tools/gpatch/patch_catalog.json);
+ *  - the lightning colour: one of the "electricity colour" mods, or DEFAULT (only one can be on).
+ * Sections: LIGHTNING COLOUR, RECOMMENDED (<app>/<game>/mods/recommended.txt, one id a line), SKINS & OUTFITS, UI &
+ * BUTTONS, ENEMIES & WORLD, GAMEPLAY, CHEATS, OTHER. LEFT RIGHT the game, UP DOWN move, X on/off (on the lightning
+ * row: the next colour, TRIANGLE the one before), SQUARE twice: all off for that game. Something that conflicts with
+ * what is on is greyed with the reason; turning on a patch that requires another turns that on too (and says so).
+ * Saved at once (s_md_list -> launcher_<game>.ini, launcher.ini). Fixed sizes: MD_MAX mods a game, MD_CATMAX catalog
+ * entries a game; a mod.json that can't be read is skipped (logs/launcher.log says why). ---- */
+/* MODS CATALOG BEGIN -- GENERATED by tools/gpatch/gen_mods_catalog.py from tools/gpatch/patch_catalog.json + tools/gpatch/cheat_table_*.inc; do not edit.
+ * { id, game dir, name, one-line description, author, category, risk note, needs (free text), requires, conflicts
+ * (comma-separated ids of the same game), cheat (1: CHEATS / ini cheats / PS3_CHEATS, 0: GAMEPLAY / ini
+ * gameplay_patches / PS3_GPATCH) } */
+typedef struct { const char *id, *game, *name, *desc, *author, *cat, *risk, *needs, *requires, *conflicts; int cheat; } md_cat_t;
+static const md_cat_t kModCat[] = {
+    { "if2_skip_intro", "if2", "Skip intro movie", "The splash movie at start-up is skipped.", "FlexBy", "MISC", "low: the launcher SKIP INTRO setting does the same through PS3_SKIP_MOVIES", "", "", "skip_intro", 0 },
+    { "if2_extended_fov", "if2", "Extended FOV", "Wider field of view.", "illusion", "CAMERA", "medium: in our EBOOT the word holds the integer 4, not a float (the patch comment: game settings may need \"li\" instead); reproduced as published, check the picture", "", "", "ext_fov", 0 },
+    { "if2_no_mesh_trim", "if2", "Disable mesh trimming", "Stops distant meshes being trimmed at resolutions above the PS3's.", "Yahfz", "VISUALS", "low (visual)", "", "", "mesh_trim", 0 },
+    { "if2_expand_pack_buffer", "if2", "Expand pack buffer", "Bigger streaming buffer for asset packs (121 MB to 132 MB).", "L_ (copy: bungholio (remix by STALKER))", "FIX", "medium: 11 MB more guest memory for the pack buffer; check the boot log for allocation failures", "", "", "", 0 },
+    { "if2_thrusters_fast", "if2", "Static Thrusters - Fast (2000)", "Gliding with Static Thrusters is faster (forward speed 1350 to 2000).", "L_", "MOVEMENT", "low", "in game: the Improved Static Thrusters upgrade", "", "if2_thrusters_fast_2555", 0 },
+    { "if2_thrusters_fast_2555", "if2", "Static Thrusters - Fast (2555)", "Gliding with Static Thrusters is much faster (forward speed 1350 to 2555).", "bungholio (remix by STALKER)", "MOVEMENT", "low", "in game: the Improved Static Thrusters upgrade", "", "if2_thrusters_fast", 0 },
+    { "if2_thrusters_flight", "if2", "Static Thrusters - Flight", "While gliding: hold Cross to rise, Circle to sink (rise 600, sink 1200).", "L_", "MOVEMENT", "low", "in game: the Improved Static Thrusters upgrade", "", "if2_thrusters_flight_fast", 0 },
+    { "if2_thrusters_flight_fast", "if2", "Static Thrusters - Flight (fast)", "While gliding: hold Cross to rise, Circle to sink, faster (rise 1555, sink 2555).", "bungholio (remix by STALKER)", "MOVEMENT", "low", "in game: the Improved Static Thrusters upgrade", "", "if2_thrusters_flight", 0 },
+    { "if2_black_lightning", "if2", "Black Lightning", "Cole's lightning is drawn black (colour patch).", "L_ (copy: bungholio (remix by STALKER))", "VISUALS", "medium: calls a game function from a new place (as the cave does)", "", "", "", 0 },
+    { "if2_karma_instant", "if2", "Instant karma change", "Karma jumps instead of moving gradually.", "bungholio (remix by STALKER)", "DIFFICULTY/CHEAT", "high: author \"BETA BROKEN, can mess up progress unlocks\"", "", "", "", 0 },
+    { "if2_karma_frozen", "if2", "Karma never changes", "Nothing changes Cole's karma.", "bungholio (remix by STALKER)", "DIFFICULTY/CHEAT", "medium: story karma choices stop counting", "", "", "", 0 },
+    { "if2_no_harm_reaction", "if2", "Cole does not react to harm", "Cole ignores hits (no stagger).", "bungholio (remix by STALKER)", "DIFFICULTY/CHEAT", "medium", "", "if2_cole_never_dies", "", 0 },
+    { "if2_enemies_never_attack", "if2", "Most enemies never attack", "Most enemies stop attacking.", "bungholio (remix by STALKER)", "DIFFICULTY/CHEAT", "high: author \"BETA BROKEN CRASH\"", "", "", "", 0 },
+    { "if2_attacks_free", "if2", "Attacks cost no electricity", "Electric attacks and sniper zoom do not drain energy.", "bungholio (remix by STALKER)", "POWERS", "low", "", "", "", 0 },
+    { "if2_cole_never_dies", "if2", "Cole never dies", "Cole's health is set to a huge value whenever it is checked.", "bungholio (remix by STALKER)", "DIFFICULTY/CHEAT", "low", "", "", "", 0 },
+    { "if2_karma_evil_only", "if2", "Only evil karma", "Karma can only move towards evil.", "bungholio (remix by STALKER)", "DIFFICULTY/CHEAT", "high: author \"BETA BROKEN, can mess up progress unlocks\"", "", "", "if2_karma_good_only", 0 },
+    { "if2_karma_good_only", "if2", "Only good karma", "Karma can only move towards good.", "bungholio (remix by STALKER)", "DIFFICULTY/CHEAT", "high: author \"BETA BROKEN, can mess up progress unlocks\"", "", "", "if2_karma_evil_only", 0 },
+    { "if2_mod_pack_plus2", "if2", "Mod pack PLUS2", "All of: no harm reaction, karma frozen, nothing can die, AI x2 speed, jump x10, free attacks, Cole never dies.", "bungholio (remix by STALKER)", "DIFFICULTY/CHEAT", "high (sum of the members)", "", "", "", 0 },
+    { "if2_ai_speed_x2", "if2", "AI movement speed x2", "People and enemies move twice as fast.", "bungholio (remix by STALKER)", "DIFFICULTY/CHEAT", "low", "", "", "", 0 },
+    { "if2_jump_x10", "if2", "Jump height x10", "Cole jumps 10 times as high.", "bungholio (remix by STALKER)", "MOVEMENT", "medium (x10: long falls)", "", "", "if2_jump_x2,if2_jump_x5", 0 },
+    { "if2_jump_x2", "if2", "Jump height x2", "Cole jumps 2 times as high.", "bungholio (remix by STALKER)", "MOVEMENT", "low", "", "", "if2_jump_x10,if2_jump_x5", 0 },
+    { "if2_jump_x5", "if2", "Jump height x5", "Cole jumps 5 times as high.", "bungholio (remix by STALKER)", "MOVEMENT", "low", "", "", "if2_jump_x10,if2_jump_x2", 0 },
+    { "if2_karma_fast", "if2", "Very fast karma gain and loss", "Karma moves very fast.", "bungholio (remix by STALKER)", "DIFFICULTY/CHEAT", "high: removes a stack frame (guest stack corruption in the original too); author \"BETA BROKEN, can mess up progress unlocks\"", "", "", "", 0 },
+    { "if2_nothing_can_die", "if2", "Nothing can die", "Characters should not die (author: no effect).", "bungholio (remix by STALKER)", "DIFFICULTY/CHEAT", "low (author: \"BETA NO EFFECT\")", "", "", "", 0 },
+    { "fob_skip_intro", "fob", "Skip intro movie", "The splash movies at start-up are skipped.", "FlexBy", "MISC", "low: same as the launcher SKIP INTRO", "", "", "", 0 },
+    { "fob_no_mesh_trim", "fob", "Disable mesh trimming", "Stops distant meshes being trimmed at resolutions above the PS3's.", "Pappapatu", "VISUALS", "low (visual)", "", "", "", 0 },
+    { "fob_cole_never_dies", "fob", "Cole never dies", "Cole's health is set to a huge value whenever it is checked.", "chidreams", "DIFFICULTY/CHEAT", "low", "", "", "", 0 },
+    { "fob_infinite_electricity", "fob", "Infinite electricity", "Using powers adds energy instead of draining it.", "Hiei-YYH", "POWERS", "low", "", "", "", 0 },
+    { "fob_expand_pack_buffer", "fob", "Expand pack buffer", "Bigger streaming buffer for asset packs (121 MB to 132 MB).", "FlexBy (L_'s inFAMOUS 2 patch)", "FIX", "medium: 11 MB more guest memory", "", "", "", 0 },
+    { "fob_thrusters_fast", "fob", "Static Thrusters - Fast", "Gliding with Static Thrusters is much faster (1350 to 2555).", "FlexBy (bungholio (remix by STALKER) values)", "MOVEMENT", "low", "in game: the Improved Static Thrusters upgrade", "", "", 0 },
+    { "fob_thrusters_flight", "fob", "Static Thrusters - Flight", "While gliding: hold Cross to rise, Circle to sink (1555 / 2555).", "FlexBy (bungholio (remix by STALKER) values)", "MOVEMENT", "low", "in game: the Improved Static Thrusters upgrade", "", "", 0 },
+    { "fob_black_lightning", "fob", "Black Lightning", "Cole's lightning is drawn black (colour patch).", "FlexBy (L_'s inFAMOUS 2 patch)", "VISUALS", "medium: the object offsets +0x11C/+0x5C/+0x60 are assumed unchanged in FoB (some other offsets in this function moved by 4/16)", "", "", "", 0 },
+    { "if1_skip_intro", "if1", "Skip intro movie", "The splash movie at start-up is skipped.", "FlexBy", "MISC", "low: same as the launcher SKIP INTRO", "", "", "", 0 },
+    { "if1_no_mesh_trim", "if1", "Disable mesh trimming", "Stops distant meshes being trimmed at resolutions above the PS3's.", "Yahfz", "VISUALS", "low (visual)", "", "", "", 0 },
+    { "if1_fov_1_4", "if1", "FOV 1.4 (narrower)", "Narrower field of view (factor 1.4; 1.0 is the game's; lower = wider).", "Hasster", "CAMERA", "low", "", "", "if1_fov_1_2,if1_fov_1_1,if1_fov_0_9,if1_fov_0_8,if1_fov_0_6", 0 },
+    { "if1_fov_1_2", "if1", "FOV 1.2 (narrower)", "Narrower field of view (factor 1.2; 1.0 is the game's; lower = wider).", "Hasster", "CAMERA", "low", "", "", "if1_fov_1_4,if1_fov_1_1,if1_fov_0_9,if1_fov_0_8,if1_fov_0_6", 0 },
+    { "if1_fov_1_1", "if1", "FOV 1.1 (narrower)", "Narrower field of view (factor 1.1; 1.0 is the game's; lower = wider).", "Hasster", "CAMERA", "low", "", "", "if1_fov_1_4,if1_fov_1_2,if1_fov_0_9,if1_fov_0_8,if1_fov_0_6", 0 },
+    { "if1_fov_0_9", "if1", "FOV 0.9 (wider)", "Wider field of view (factor 0.9; 1.0 is the game's; lower = wider).", "Hasster", "CAMERA", "low", "", "", "if1_fov_1_4,if1_fov_1_2,if1_fov_1_1,if1_fov_0_8,if1_fov_0_6", 0 },
+    { "if1_fov_0_8", "if1", "FOV 0.8 (wider)", "Wider field of view (factor 0.8; 1.0 is the game's; lower = wider).", "Hasster", "CAMERA", "low", "", "", "if1_fov_1_4,if1_fov_1_2,if1_fov_1_1,if1_fov_0_9,if1_fov_0_6", 0 },
+    { "if1_fov_0_6", "if1", "FOV 0.6 (wider)", "Wider field of view (factor 0.6; 1.0 is the game's; lower = wider).", "Hasster", "CAMERA", "low", "", "", "if1_fov_1_4,if1_fov_1_2,if1_fov_1_1,if1_fov_0_9,if1_fov_0_8", 0 },
+    { "if1_blur_bloom_fix", "if1", "High-resolution blur and bloom fix", "Smoother blur and bloom at higher resolutions (sample offsets cut to a third).", "artofaria", "VISUALS", "low (visual)", "", "", "", 0 },
+    { "if1_infinite_health", "if1", "Infinite health", "Cole's health is refilled to maximum whenever he takes damage.", "Codex", "DIFFICULTY/CHEAT", "low; r25 is the damaged character: if enemies also become unkillable, it is not Cole-only (the RPCS3 patch has the same property)", "", "", "if1_enemies_die_on_fall", 0 },
+    { "if1_enemies_die_on_fall", "if1", "Enemies die after falling", "Knocked-down characters die (as published, including its typo).", "bungholio (remix by STALKER)", "DIFFICULTY/CHEAT", "high: an author BETA cheat whose effect depends on a stale condition register; conflicts with if1_infinite_health (same instructions)", "", "", "if1_infinite_health", 0 },
+    { "if1_all_powers", "if1", "All powers unlocked", "Every power is available.", "Scirvir", "POWERS", "medium: the unlock bits are written into the save", "", "", "", 0 },
+    { "if1_no_shadows", "if1", "Disable shadows", "No dynamic shadows (faster).", "FlexBy", "VISUALS", "low (visual)", "", "", "", 0 },
+    { "if1_disable_vfx", "if1", "Disable visual effects (experimental)", "Some shadows and lighting off, much faster in places; may glitch other effects.", "Hasster", "VISUALS", "medium (author: may cause glitches)", "", "", "", 0 },
+    { "if1_unstable_vfx", "if1", "Unstable visual effects (experimental)", "Visual effects off; last resort for speed.", "Hasster", "VISUALS", "medium (author: use only as the last resort)", "", "", "", 0 },
+    { "if1_unstable_lighting", "if1", "Unstable lighting (experimental)", "Faster, but fire, lightning and some lights partly break.", "Hasster", "VISUALS", "medium (author: partially breaks fire, lightning and lighting)", "", "", "", 0 },
+    { "if1_cole_invincible", "if1", "Cole is invincible", "Damage is never applied to Cole.", "bungholio (remix by STALKER)", "DIFFICULTY/CHEAT", "low", "", "", "", 0 },
+    { "if1_unlimited_electricity", "if1", "Unlimited electricity", "Energy stays full (as published).", "bungholio (remix by STALKER)", "POWERS", "medium: works through a stale register, as the original does", "", "", "", 0 },
+    { "if1_always_hero", "if1", "Always hero (good)", "Cole counts as good.", "bungholio (remix by STALKER)", "DIFFICULTY/CHEAT", "medium: every caller of this range test gets 0", "", "", "if1_always_infamous", 0 },
+    { "if1_always_infamous", "if1", "Always infamous (evil)", "Cole counts as evil.", "bungholio (remix by STALKER)", "DIFFICULTY/CHEAT", "medium: every caller of this range test gets 1 when the value is above the low end", "", "", "if1_always_hero", 0 },
+    { "if1_no_ai", "if1", "No enemy AI", "Enemies never shoot and their AI is off.", "bungholio (remix by STALKER)", "DIFFICULTY/CHEAT", "low", "", "", "", 0 },
+    { "if1_ai_speed_stand", "if1", "AI speed: stand still", "AI stands still (speed 0).", "STALKER", "DIFFICULTY/CHEAT", "medium (located by its unique 1.0 constant; author BETA)", "", "", "if1_ai_speed_x2,if1_ai_speed_back,if1_ai_speed_back_x2", 0 },
+    { "if1_ai_speed_x2", "if1", "AI speed: x2", "AI moves twice as fast.", "STALKER", "DIFFICULTY/CHEAT", "medium (located by its unique 1.0 constant; author BETA)", "", "", "if1_ai_speed_stand,if1_ai_speed_back,if1_ai_speed_back_x2", 0 },
+    { "if1_ai_speed_back", "if1", "AI speed: backwards", "AI moves backwards.", "STALKER", "DIFFICULTY/CHEAT", "medium (located by its unique 1.0 constant; author BETA)", "", "", "if1_ai_speed_stand,if1_ai_speed_x2,if1_ai_speed_back_x2", 0 },
+    { "if1_ai_speed_back_x2", "if1", "AI speed: backwards x2", "AI moves backwards, twice as fast.", "STALKER", "DIFFICULTY/CHEAT", "medium (located by its unique 1.0 constant; author BETA)", "", "", "if1_ai_speed_stand,if1_ai_speed_x2,if1_ai_speed_back", 0 },
+    { "if1_brightness_125", "if1", "Brightness x1.25", "Picture 25% brighter.", "bungholio (remix by STALKER)", "VISUALS", "low (visual)", "", "", "if1_brightness_150", 0 },
+    { "if1_brightness_150", "if1", "Brightness x1.50", "Picture 50% brighter.", "bungholio (remix by STALKER)", "VISUALS", "low (visual)", "", "", "if1_brightness_125", 0 },
+    { "if1_circular_stick", "if1", "Circular stick mapping (2% deadzone)", "Analog sticks get a round range and a small 2% deadzone.", "artofaria", "FIX", "medium: replaces the whole calibration (also the menus'); located by signature, not by bytes", "", "", "", 0 },
+    { "skip_intro", "if2", "Skip Intro", "Applied when the game starts.", "FlexBy (RPCS3 patch.yml)", "CHEAT", "", "", "", "if2_skip_intro", 1 },
+    { "ext_fov", "if2", "Extended FOV", "Applied when the game starts.", "illusion (RPCS3 patch.yml)", "CHEAT", "", "", "", "if2_extended_fov", 1 },
+    { "mesh_trim", "if2", "Disable Mesh Trimming", "Applied when the game starts.", "Yahfz (RPCS3 patch.yml)", "CHEAT", "", "", "", "if2_no_mesh_trim", 1 },
+    { "thrusters_fast", "if2", "Static Thrusters - Fast (data approximation)", "Applied when the game starts.", "L_ (imported_patch.yml)", "CHEAT", "", "", "", "", 1 },
+    { "karma_good", "if2", "Karma: max Good", "Written once when the game starts; a save made afterwards keeps it.", "rpcs3.CT", "CHEAT", "", "", "", "karma_evil", 1 },
+    { "karma_evil", "if2", "Karma: max Evil", "Written once when the game starts; a save made afterwards keeps it.", "rpcs3.CT", "CHEAT", "", "", "", "karma_good", 1 },
+    { "ionic3", "if2", "Ionic charges: 3", "Held at this value all the time while you play.", "Unlock Powers (inF2).CT", "CHEAT", "", "", "", "", 1 },
+    { "hide_hud", "if2", "Hide HUD", "Held at this value all the time while you play.", "rpcs3.CT", "CHEAT", "", "", "", "", 1 },
+    { "unlock_all", "if2", "Unlock all powers + upgrades", "Written once when the game starts; a save made afterwards keeps it.", "Unlock Powers (inF2).CT script", "CHEAT", "", "", "", "", 1 },
+};
+/* MODS CATALOG END */
+
+/* Which catalog entries the MODS page lists (2026-11-13, launch2), set when building (build_launcher.sh passes the
+ * environment's MD_CATALOG_GAMES / MD_CATALOG_HIDE on):
+ *   MD_CATALOG_GAMES  a mask of games whose GAMEPLAY / CHEATS entries are listed, bit i = kDir[i]:
+ *                     1 = if1 (inFAMOUS), 2 = if2 (inFAMOUS 2), 4 = fob (Festival of Blood); 7 all; 0 none (default)
+ *   MD_CATALOG_HIDE   "id,id,...": entries never listed, whatever the mask (default "")
+ * An entry whose "requires" names a hidden one is hidden too. An id of launcher_<game>.ini's gameplay_patches /
+ * cheats that isn't listed is never passed on to the game (settings_write leaves it out of launcher.ini). */
+#if !defined(MD_CATALOG_GAMES) && defined(MD_CATALOG_ACTIVE)
+#define MD_CATALOG_GAMES (MD_CATALOG_ACTIVE ? 7 : 0)   /* (the old 0/1 switch) */
+#endif
+#ifndef MD_CATALOG_GAMES
+#define MD_CATALOG_GAMES 0
+#endif
+/* 2026-11-14 (the user, on the console: "it's cluttered ... why are cheats in the mods menu"): the MODS page lists
+ * mods only. Never listed, by default:
+ *  - cheats (invincible, energy, unlocks, karma side, AI, jump height): they are switched in game, in the quick
+ *    menu's CHEATS page (L3+R3; each game's qm_cheats_<game>.inc), and are not passed on from here;
+ *  - doubles of a launcher setting (skip intro), technical fixes (pack buffer), emulator speed hacks that break the
+ *    picture (no shadows, the "unstable" ones), brightness (LOOK does that), the narrower FOVs, entries their
+ *    authors mark broken, and inFAMOUS 2's Black Lightning (shows nothing there; Festival of Blood's works). */
+#ifndef MD_CATALOG_HIDE
+#define MD_CATALOG_HIDE \
+    "if1_cole_invincible,if1_unlimited_electricity,if1_all_powers,if1_always_hero,if1_always_infamous,if1_no_ai," \
+    "if1_ai_speed_stand,if1_ai_speed_x2,if1_ai_speed_back,if1_ai_speed_back_x2,if1_infinite_health,if1_enemies_die_on_fall," \
+    "if1_skip_intro,if1_fov_1_4,if1_fov_1_2,if1_fov_1_1,if1_brightness_125,if1_brightness_150," \
+    "if1_no_shadows,if1_disable_vfx,if1_unstable_vfx,if1_unstable_lighting," \
+    "if2_cole_never_dies,if2_no_harm_reaction,if2_attacks_free,if2_jump_x2,if2_jump_x5,if2_jump_x10,if2_ai_speed_x2," \
+    "if2_karma_frozen,if2_karma_good_only,if2_karma_evil_only,if2_karma_instant,if2_karma_fast,if2_enemies_never_attack," \
+    "if2_nothing_can_die,if2_mod_pack_plus2,if2_skip_intro,if2_expand_pack_buffer,if2_black_lightning," \
+    "skip_intro,ext_fov,mesh_trim,thrusters_fast,karma_good,karma_evil,ionic3,hide_hud,unlock_all," \
+    "fob_cole_never_dies,fob_infinite_electricity,fob_skip_intro,fob_expand_pack_buffer"
+#endif
+static int md_in_csv(const char* list, const char* id)
+{
+    const size_t n = strlen(id);
+    for (const char* s = list; *s;) {
+        while (*s == ',' || *s == ' ') s++;
+        const char* e = s;
+        while (*e && *e != ',' && *e != ' ') e++;
+        if ((size_t)(e - s) == n && n && !strncmp(s, id, n)) return 1;
+        s = e;
+    }
+    return 0;
+}
+static int md_cat_base(int g, const md_cat_t* c) { return !strcmp(c->game, kDir[g]) && (MD_CATALOG_GAMES >> g & 1) && !md_in_csv(MD_CATALOG_HIDE, c->id); }
+static int md_cat_shown(int g, const md_cat_t* c)
+{
+    if (!md_cat_base(g, c)) return 0;
+    for (const char* s = c->requires; s && *s;) {   /* (each requirement listed too) */
+        char id[64]; int q = 0;
+        while (*s && *s != ',') { if (q < 63) id[q++] = *s; s++; }
+        id[q] = 0;
+        if (*s) s++;
+        if (!id[0]) continue;
+        int ok = 0;
+        for (size_t k = 0; k < sizeof kModCat / sizeof kModCat[0] && !ok; k++) ok = !strcmp(kModCat[k].id, id) && md_cat_base(g, &kModCat[k]);
+        if (!ok) return 0;
+    }
+    return 1;
+}
+/* k 1 gameplay_patches / 2 cheats: id a listed entry of that kind for game g */
+static int md_fwd_ok(int g, int k, const char* id)
+{
+    for (size_t c = 0; c < sizeof kModCat / sizeof kModCat[0]; c++)
+        if (!strcmp(kModCat[c].id, id) && kModCat[c].cheat == (k == 2) && md_cat_shown(g, &kModCat[c])) return 1;
+    return 0;
+}
+
+enum { MD_MAX = 256, MD_CATMAX = 64, MD_ITEMS = MD_MAX + MD_CATMAX, MD_W = (MD_ITEMS + 31) / 32, MD_NSEC = 9, MD_CONFIRM = 400, MD_OCONFIRM = 500,
+       MD_ROW_LIGHT = -100, MD_ROW_ONLINE = -101, MD_ROW_NAME = -102, MD_JSON_MAX = 1 << 20, MD_POOL = 192 * 1024 };
+enum { MK_MOD, MK_GP, MK_CHEAT };
+enum { MS_LIGHT, MS_REC, MS_SKIN, MS_UI, MS_WORLD, MS_GP, MS_CHEAT, MS_OTHER, MS_ONLINE };   /* (MS_ONLINE: its heading only, shown after LIGHTNING COLOUR) */
+enum { SW_NONE, SW_ONE, SW_TWO, SW_RAINBOW };
+typedef struct {
+    char id[64], name[96], author[64], note[240];
+    const char *desc, *cat, *risk, *needs;   /* (a catalog entry's) */
+    uint8_t kind, sec, partial, light, on, swk;
+    uint32_t sw[2];                   /* swatch colours (the lightning colours') */
+    int ord, pool_at;                 /* ord: when it was turned on (priority); pool_at: its conflicts_with in s_md_pool */
+    int16_t req[4]; uint8_t nreq;
+    uint32_t conf[MD_W];              /* conflicts, both ways */
+} md_item_t;
+typedef struct {
+    int loaded, dir_ok, n, nmods, nskip, nother_ed, ord, light_on, nlight, nrow;
+    char edition[8];                  /* inFAMOUS: "eu" / "usa" ("" not installed: every mod shown) */
+    int16_t light[MD_MAX];            /* the lightning colours, in the selector's order */
+    int16_t row[MD_ITEMS + MD_NSEC + 3];   /* what the list shows: an item, MD_ROW_LIGHT, MD_ROW_ONLINE, or -1 - section (a heading) */
+    md_item_t it[MD_ITEMS];
+} md_game_t;
+static md_game_t s_md[NGAMES];
+static char s_md_pool[MD_POOL];
+static int s_md_pool_n;
+static struct { int game, sel; float scroll; char msg[320]; float msg_t; } MD = { 1, 0, 0, "", -100 };
+
+/* Our own lightning colours (mods/lightning_<name>): since 2026-11-14 a PRESET of the in-game colour wheel (the live
+ * recolour: lightning_hue), not a file pack. Nothing of the game is replaced, so a colour never blocks a skin and the
+ * wheel (L3+R3) keeps working. -100: not one (lightning_dark, lightning_twotone and community colour mods are packs). */
+static int md_preset_hue(const char* id)
+{
+    static const struct { const char* n; int h; } k[] = { { "red", 0 }, { "orange", 30 }, { "yellow", 60 }, { "lime", 90 }, { "green", 120 },
+        { "mint", 150 }, { "cyan", 180 }, { "azure", 210 }, { "blue", 240 }, { "violet", 270 }, { "magenta", 300 }, { "rose", 330 }, { "white", -2 } };
+    if (strncmp(id, "lightning_", 10)) return -100;
+    for (size_t i = 0; i < sizeof k / sizeof k[0]; i++) if (!strcmp(id + 10, k[i].n)) return k[i].h;
+    return -100;
+}
+static int md_lc(int c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
+static int md_ieq(const char* a, const char* b) { while (*a && md_lc(*a) == md_lc(*b)) { a++; b++; } return md_lc(*a) == md_lc(*b); }
+static int md_icmp(const char* a, const char* b) { while (*a && md_lc(*a) == md_lc(*b)) { a++; b++; } return md_lc((unsigned char)*a) - md_lc((unsigned char)*b); }
+static int md_idok(const char* s)
+{
+    if (!*s || *s == '.') return 0;
+    for (; *s; s++) if (!((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || (*s >= '0' && *s <= '9') || *s == '_' || *s == '-' || *s == '.')) return 0;
+    return 1;
+}
+static int md_find(const md_game_t* m, const char* id)
+{
+    for (int i = 0; i < m->n; i++) if (!strcmp(m->it[i].id, id)) return i;
+    return -1;
+}
+
+/* ---- mod.json: a small, tolerant JSON reader (the keys MODS uses; anything else is skipped) ---- */
+typedef struct { const char* p; const char* e; } md_js_t;
+static int md_js_ws(md_js_t* j)
+{
+    while (j->p < j->e && (*j->p == ' ' || *j->p == '\t' || *j->p == '\n' || *j->p == '\r')) j->p++;
+    return j->p < j->e ? (unsigned char)*j->p : -1;
+}
+/* one letter (code point) onto out as UTF-8; a letter that doesn't fit ends the text there (whole letters only) */
+static void md_put(char* out, size_t n, size_t* k, uint32_t cp)
+{
+    if (!out || *k >= n) return;
+    unsigned char b[4]; size_t m;
+    if (cp < 0x20) cp = ' ';
+    if (cp < 0x80) { b[0] = (unsigned char)cp; m = 1; }
+    else if (cp < 0x800) { b[0] = (unsigned char)(0xC0 | cp >> 6); b[1] = (unsigned char)(0x80 | (cp & 63)); m = 2; }
+    else if (cp < 0x10000) { b[0] = (unsigned char)(0xE0 | cp >> 12); b[1] = (unsigned char)(0x80 | (cp >> 6 & 63)); b[2] = (unsigned char)(0x80 | (cp & 63)); m = 3; }
+    else { b[0] = (unsigned char)(0xF0 | cp >> 18); b[1] = (unsigned char)(0x80 | (cp >> 12 & 63)); b[2] = (unsigned char)(0x80 | (cp >> 6 & 63)); b[3] = (unsigned char)(0x80 | (cp & 63)); m = 4; }
+    if (*k + m + 1 > n) {   /* full: the end made an ellipsis (whole letters) */
+        size_t e = *k;
+        while (e && e + 4 > n) { e--; while (e && ((unsigned char)out[e] & 0xC0) == 0x80) e--; }
+        if (e + 4 <= n) memcpy(out + e, "\xE2\x80\xA6", 4);
+        *k = n; return;
+    }
+    memcpy(out + *k, b, m); *k += m; out[*k] = 0;
+}
+static int md_js_hex4(md_js_t* j, uint32_t* v)
+{
+    *v = 0;
+    for (int i = 0; i < 4; i++, j->p++) {
+        if (j->p >= j->e) return -1;
+        const int c = md_lc(*j->p);
+        *v = *v << 4 | (uint32_t)(c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : 99);
+        if (*v & 0xFFFF0000u) return -1;
+    }
+    return 0;
+}
+/* a string into out (NULL: skipped); 0 ok */
+static int md_js_str(md_js_t* j, char* out, size_t n)
+{
+    size_t k = 0;
+    if (out && n) out[0] = 0;
+    if (md_js_ws(j) != '"') return -1;
+    j->p++;
+    while (j->p < j->e) {
+        unsigned c = (unsigned char)*j->p++;
+        if (c == '"') return 0;
+        if (c == '\\') {
+            if (j->p >= j->e) return -1;
+            c = (unsigned char)*j->p++;
+            uint32_t cp;
+            switch (c) {
+            case 'n': case 't': case 'r': case 'b': case 'f': cp = ' '; break;
+            case '"': case '\\': case '/': cp = c; break;
+            case 'u':
+                if (md_js_hex4(j, &cp)) return -1;
+                if (cp >= 0xD800 && cp < 0xDC00 && j->e - j->p >= 6 && j->p[0] == '\\' && j->p[1] == 'u') {
+                    uint32_t lo; j->p += 2;
+                    if (md_js_hex4(j, &lo)) return -1;
+                    cp = lo >= 0xDC00 && lo < 0xE000 ? 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00) : '?';
+                } else if (cp >= 0xD800 && cp < 0xE000) cp = '?';
+                if (!cp) cp = '?';
+                break;
+            default: return -1;
+            }
+            md_put(out, n, &k, cp);
+            continue;
+        }
+        if (c < 0x80) { md_put(out, n, &k, c); continue; }
+        /* UTF-8 as it is: a whole sequence or '?' */
+        const int m = c >= 0xF0 && c < 0xF8 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : -1;
+        uint32_t cp = m == 3 ? c & 7 : m == 2 ? c & 15 : c & 31;
+        int ok = m > 0 && j->e - j->p >= m;
+        for (int i = 0; ok && i < m; i++) { const unsigned d = (unsigned char)j->p[i]; if ((d & 0xC0) != 0x80) ok = 0; else cp = cp << 6 | (d & 63); }
+        if (ok) j->p += m;
+        md_put(out, n, &k, ok && cp >= 0x80 && cp < 0x110000 ? cp : '?');
+    }
+    return -1;
+}
+static int md_js_num(md_js_t* j, long* v)
+{
+    int neg = 0, digits = 0; *v = 0;
+    md_js_ws(j);
+    if (j->p < j->e && *j->p == '-') { neg = 1; j->p++; }
+    while (j->p < j->e && *j->p >= '0' && *j->p <= '9') { if (*v < 100000000L) *v = *v * 10 + (*j->p - '0'); j->p++; digits++; }
+    while (j->p < j->e && ((*j->p >= '0' && *j->p <= '9') || *j->p == '.' || *j->p == 'e' || *j->p == 'E' || *j->p == '+' || *j->p == '-')) j->p++;
+    if (neg) *v = -*v;
+    return digits ? 0 : -1;
+}
+static int md_js_skip(md_js_t* j, int depth)
+{
+    if (depth > 48) return -1;
+    const int c = md_js_ws(j);
+    if (c == '"') return md_js_str(j, NULL, 0);
+    if (c == '{' || c == '[') {
+        const int close = c == '{' ? '}' : ']';
+        j->p++;
+        if (md_js_ws(j) == close) { j->p++; return 0; }
+        for (;;) {
+            if (c == '{') { if (md_js_str(j, NULL, 0) || md_js_ws(j) != ':') return -1; j->p++; }
+            if (md_js_skip(j, depth + 1)) return -1;
+            const int d = md_js_ws(j);
+            if (d == ',') { j->p++; continue; }
+            if (d == close) { j->p++; return 0; }
+            return -1;
+        }
+    }
+    if (c == '-' || (c >= '0' && c <= '9')) { long v; return md_js_num(j, &v); }
+    static const char* const lit[3] = { "true", "false", "null" };
+    for (int i = 0; i < 3; i++) {
+        const size_t n = strlen(lit[i]);
+        if ((size_t)(j->e - j->p) >= n && !strncmp(j->p, lit[i], n)) { j->p += n; return 0; }
+    }
+    return -1;
+}
+/* conflicts_with: each id into s_md_pool ("id\0id\0...") */
+static int md_js_pool(md_js_t* j)
+{
+    if (md_js_ws(j) != '[') return md_js_skip(j, 0);
+    j->p++;
+    if (md_js_ws(j) == ']') { j->p++; return 0; }
+    for (;;) {
+        if (md_js_ws(j) == '"') {
+            char id[64];
+            if (md_js_str(j, id, sizeof id)) return -1;
+            const size_t n = strlen(id) + 1;
+            if (md_idok(id) && s_md_pool_n + (int)n < MD_POOL) { memcpy(s_md_pool + s_md_pool_n, id, n); s_md_pool_n += (int)n; }
+        } else if (md_js_skip(j, 1)) return -1;
+        const int d = md_js_ws(j);
+        if (d == ',') { j->p++; continue; }
+        if (d == ']') { j->p++; return 0; }
+        return -1;
+    }
+}
+/* notes: a string or an array of them, joined */
+static int md_js_notes(md_js_t* j, char* out, size_t n)
+{
+    char one[240];
+    if (md_js_ws(j) == '"') { if (md_js_str(j, one, sizeof one)) return -1; snprintf(out, n, "%s", one); return 0; }
+    if (md_js_ws(j) != '[') return md_js_skip(j, 0);
+    j->p++;
+    if (md_js_ws(j) == ']') { j->p++; return 0; }
+    for (;;) {
+        if (md_js_ws(j) == '"') {
+            if (md_js_str(j, one, sizeof one)) return -1;
+            const size_t k = strlen(out);
+            if (one[0] && k + 3 < n) snprintf(out + k, n - k, "%s%s", k ? "  " : "", one);
+        } else if (md_js_skip(j, 1)) return -1;
+        const int d = md_js_ws(j);
+        if (d == ',') { j->p++; continue; }
+        if (d == ']') { j->p++; return 0; }
+        return -1;
+    }
+}
+/* swatch: "#RRGGBB" / "RRGGBB" or [r, g, b]; 1 when read */
+static int md_js_rgb(md_js_t* j, uint32_t* rgb, int* bad)
+{
+    const int c = md_js_ws(j);
+    if (c == '"') {
+        char s[16];
+        if (md_js_str(j, s, sizeof s)) { *bad = 1; return 0; }
+        const char* h = s[0] == '#' ? s + 1 : s;
+        uint32_t v = 0; int n = 0;
+        for (; *h && n < 7; h++, n++) { const int d = md_lc(*h); if (!((d >= '0' && d <= '9') || (d >= 'a' && d <= 'f'))) { n = 99; break; } v = v << 4 | (uint32_t)(d <= '9' ? d - '0' : d - 'a' + 10); }
+        if (n != 6) return 0;
+        *rgb = v; return 1;
+    }
+    if (c != '[') { *bad = md_js_skip(j, 0) != 0; return 0; }
+    j->p++;
+    long v[3] = { 0, 0, 0 }; int n = 0;
+    for (;;) {
+        long x;
+        if (md_js_ws(j) == ']') { j->p++; break; }
+        if (md_js_num(j, &x)) { *bad = 1; return 0; }
+        if (n < 3) v[n] = x < 0 ? 0 : x > 255 ? 255 : x;
+        n++;
+        const int d = md_js_ws(j);
+        if (d == ',') { j->p++; continue; }
+        if (d == ']') { j->p++; break; }
+        *bad = 1; return 0;
+    }
+    if (n != 3) return 0;
+    *rgb = (uint32_t)(v[0] << 16 | v[1] << 8 | v[2]); return 1;
+}
+typedef struct { char id[64], game[16], edition[16], cat[48], status[16]; } md_meta_t;
+/* NULL: read; else what was wrong (*at: where) */
+static const char* md_parse(const char* buf, size_t len, md_item_t* it, md_meta_t* mt, long* at)
+{
+    md_js_t j = { buf, buf + len };
+    const char* err = NULL;
+    if (len >= 3 && (unsigned char)buf[0] == 0xEF && (unsigned char)buf[1] == 0xBB && (unsigned char)buf[2] == 0xBF) j.p += 3;
+    if (md_js_ws(&j) != '{') { err = "not a JSON object"; goto out; }
+    j.p++;
+    if (md_js_ws(&j) == '}') { err = "empty object"; goto out; }
+    for (;;) {
+        char key[32];
+        if (md_js_str(&j, key, sizeof key)) { err = "a key expected"; goto out; }
+        if (md_js_ws(&j) != ':') { err = "':' expected"; goto out; }
+        j.p++;
+        const int c = md_js_ws(&j);
+        int r = 0, bad = 0;
+        if (c == '"' && !strcmp(key, "id")) r = md_js_str(&j, mt->id, sizeof mt->id);
+        else if (c == '"' && !strcmp(key, "name")) r = md_js_str(&j, it->name, sizeof it->name);
+        else if (c == '"' && !strcmp(key, "author")) r = md_js_str(&j, it->author, sizeof it->author);
+        else if (c == '"' && !strcmp(key, "game")) r = md_js_str(&j, mt->game, sizeof mt->game);
+        else if (c == '"' && !strcmp(key, "edition")) r = md_js_str(&j, mt->edition, sizeof mt->edition);
+        else if (c == '"' && !strcmp(key, "category")) r = md_js_str(&j, mt->cat, sizeof mt->cat);
+        else if (c == '"' && !strcmp(key, "status")) r = md_js_str(&j, mt->status, sizeof mt->status);
+        else if (!strcmp(key, "conflicts_with")) r = md_js_pool(&j);
+        else if (!strcmp(key, "notes")) r = md_js_notes(&j, it->note, sizeof it->note);
+        else if (!strcmp(key, "swatch") || !strcmp(key, "swatch2")) {
+            uint32_t rgb;
+            const int k = key[6] == '2';
+            if (md_js_rgb(&j, &rgb, &bad)) { it->sw[k] = rgb; if (!k && it->swk < SW_ONE) it->swk = SW_ONE; if (k) it->swk = SW_TWO; }
+            r = bad;
+        } else r = md_js_skip(&j, 0);
+        if (r) { err = "a value that can't be read"; goto out; }
+        const int d = md_js_ws(&j);
+        if (d == ',') { j.p++; continue; }
+        if (d == '}') break;
+        err = "',' or '}' expected"; goto out;
+    }
+out:
+    *at = (long)(j.p - buf);
+    return err;
+}
+
+/* The swatch when mod.json has none: from the id (our generated colours: lightning_hueNNN, _white, _black,
+ * _twotone_bolt_<a>_glow_<b>; the community ones by the colour words in their names). */
+static uint32_t md_hsv(float h, float s, float v)
+{
+    h = fmodf(h, 360.0f); if (h < 0) h += 360.0f;
+    const float c = v * s, x = c * (1 - fabsf(fmodf(h / 60.0f, 2.0f) - 1)), m = v - c;
+    float r = 0, g = 0, b = 0;
+    if (h < 60) { r = c; g = x; } else if (h < 120) { r = x; g = c; } else if (h < 180) { g = c; b = x; }
+    else if (h < 240) { g = x; b = c; } else if (h < 300) { r = x; b = c; } else { r = c; b = x; }
+    return (uint32_t)((r + m) * 255) << 16 | (uint32_t)((g + m) * 255) << 8 | (uint32_t)((b + m) * 255);
+}
+static void md_swatch_guess(md_item_t* it)
+{
+    static const struct { const char* w; uint32_t c; } col[] = {
+        { "magenta", 0xF03CE6 }, { "emerald", 0x18C870 }, { "golden", 0xE6B432 }, { "purple", 0x9A4DFF }, { "violet", 0x9A4DFF },
+        { "yellow", 0xF5D428 }, { "orange", 0xFF8A1E }, { "green", 0x36D05A }, { "white", 0xF2F2F2 }, { "black", 0x161616 },
+        { "pink", 0xFF5FB4 }, { "teal", 0x1FC8B4 }, { "cyan", 0x2EE6F0 }, { "gold", 0xE6B432 }, { "blue", 0x3C8CFF }, { "red", 0xE8302A } };
+    char id[64]; snprintf(id, sizeof id, "%s", it->id);
+    for (char* p = id; *p; p++) *p = (char)md_lc(*p);
+    const char* hue = strstr(id, "hue");
+    if (hue && hue[3] >= '0' && hue[3] <= '9') { it->swk = SW_ONE; it->sw[0] = md_hsv((float)atoi(hue + 3), 0.85f, 1.0f); return; }
+    if (strstr(id, "rainbow") || strstr(id, "gay")) { it->swk = SW_RAINBOW; return; }
+    if (strstr(id, "invisible")) { it->swk = SW_NONE; return; }
+    const int two = strstr(id, "twotone") || strstr(id, "_and_");
+    if (strstr(id, "karmic") || strstr(id, "opposite") || (strstr(id, "mix") && !strstr(id, "mixed"))) { it->swk = SW_TWO; it->sw[0] = 0x3C8CFF; it->sw[1] = 0xE8302A; return; }
+    int n = 0; const char* at[2] = { NULL, NULL };
+    for (int pass = 0; pass < 2 && n < 2; pass++) {
+        const char* best = NULL; int bi = -1;
+        for (size_t k = 0; k < sizeof col / sizeof col[0]; k++) {
+            const char* p = strstr(at[0] && pass ? at[0] + 1 : id, col[k].w);
+            while (p && p == at[0]) p = strstr(p + 1, col[k].w);
+            if (p && (!best || p < best)) { best = p; bi = (int)k; }
+        }
+        if (bi < 0) break;
+        at[n] = best; it->sw[n++] = col[bi].c;
+        if (!two) break;
+    }
+    it->swk = n == 2 ? SW_TWO : n ? SW_ONE : SW_ONE;
+    if (!n) it->sw[0] = C_GREY;
+}
+
+static int md_sec_of(const char* cat, int* light)
+{
+    *light = 0;
+    if (md_ieq(cat, "electricity colour") || md_ieq(cat, "electricity color") || md_ieq(cat, "lightning colour") || md_ieq(cat, "lightning color")
+        || md_ieq(cat, "lightning")) { *light = 1; return MS_LIGHT; }
+    if (md_ieq(cat, "skin") || md_ieq(cat, "skins") || md_ieq(cat, "outfit") || md_ieq(cat, "outfits") || md_ieq(cat, "costume")) return MS_SKIN;
+    if (md_ieq(cat, "ui") || md_ieq(cat, "hud") || md_ieq(cat, "buttons") || md_ieq(cat, "button prompts")) return MS_UI;
+    if (md_ieq(cat, "enemies") || md_ieq(cat, "enemy") || md_ieq(cat, "world")) return MS_WORLD;
+    return MS_OTHER;
+}
+static void md_conf(md_game_t* m, int a, const char* id)
+{
+    const int b = md_find(m, id);
+    if (b < 0 || b == a) return;
+    m->it[a].conf[b >> 5] |= 1u << (b & 31);
+    m->it[b].conf[a >> 5] |= 1u << (a & 31);
+}
+static int md_confl(const md_game_t* m, int a, int b) { return (int)(m->it[a].conf[b >> 5] >> (b & 31) & 1); }
+/* an item that is on and can't be with i (skip_light: not counting the lightning colours), or -1 */
+static int md_blocker(const md_game_t* m, int i, int skip_light)
+{
+    for (int j = 0; j < m->n; j++)
+        if (j != i && m->it[j].on && md_confl(m, i, j) && !(skip_light && m->it[j].light)) return j;
+    return -1;
+}
+
+/* The lists back into s_md_list (the ini's): the lightning colour first, then each kind by when it was turned on. */
+static void md_store(int g)
+{
+    md_game_t* m = &s_md[g];
+    int16_t idx[MD_ITEMS];
+    for (int k = m->dir_ok ? 0 : 1; k < 3; k++) {
+        int n = 0;
+        for (int i = 0; i < m->n; i++)
+            if (m->it[i].on && m->it[i].kind == k && !m->it[i].light) {
+                int p = n++;
+                while (p > 0 && m->it[idx[p - 1]].ord > m->it[i].ord) { idx[p] = idx[p - 1]; p--; }
+                idx[p] = (int16_t)i;
+            }
+        char* out = s_md_list[g][k];
+        size_t len = 0; out[0] = 0;
+        for (int q = k == 0 && m->light_on >= 0 && md_preset_hue(m->it[m->light_on].id) == -100 ? -1 : 0; q < n; q++) {   /* (a preset is no mod) */
+            const char* id = m->it[q < 0 ? m->light_on : idx[q]].id;
+            const size_t l = strlen(id);
+            if (len + l + 2 > MD_LIST) { logf_("mods %s: the %s list is full (%s and after left out)\n", kDir[g], kMdKey[k], id); break; }
+            if (len) out[len++] = ',';
+            memcpy(out + len, id, l + 1); len += l;
+        }
+    }
+}
+
+/* <app>/<game>/mods (and the catalog's entries for it) into s_md[g]; then the ini's choices on it. */
+static void md_load(int g)
+{
+    md_game_t* m = &s_md[g];
+    memset(m, 0, sizeof *m);
+    m->loaded = 1; m->light_on = -1;
+    s_md_pool_n = 0;
+    char dir[160], p[400];
+    if (g == 0) {   /* inFAMOUS: the installed edition */
+        snprintf(p, sizeof p, APP "/%s/installed.txt", kDir[g]);
+        FILE* f = fopen(p, "r");
+        if (f) {
+            char l[128] = "";
+            if (fgets(l, sizeof l, f)) { if (!strncmp(l, "BCES00220", 9)) snprintf(m->edition, sizeof m->edition, "eu"); else if (!strncmp(l, "BCUS98119", 9)) snprintf(m->edition, sizeof m->edition, "usa"); }
+            fclose(f);
+        }
+    }
+    snprintf(dir, sizeof dir, APP "/%s/mods", kDir[g]);
+    DIR* d = opendir(dir);
+    m->dir_ok = d != NULL;   /* (no folder at all: the ini's mods list is kept as it is, not emptied) */
+    if (d) {
+        struct dirent* de;
+        while ((de = readdir(d))) {
+            const char* nm = de->d_name;
+            if (nm[0] == '.') continue;
+            struct stat st;
+            snprintf(p, sizeof p, "%s/%s", dir, nm);
+            if (stat(p, &st) || !S_ISDIR(st.st_mode)) continue;   /* (recommended.txt, ...) */
+            if (strlen(nm) >= sizeof m->it[0].id || !md_idok(nm)) { logf_("mods %s: skipped folder '%.80s' (a mod id: letters, digits, _ - . and under 64)\n", kDir[g], nm); m->nskip++; continue; }
+            snprintf(p, sizeof p, "%s/%s/mod.json", dir, nm);
+            FILE* f = fopen(p, "rb");
+            if (!f) { logf_("mods %s: %s has no mod.json: skipped\n", kDir[g], nm); m->nskip++; continue; }
+            if (m->nmods >= MD_MAX) { fclose(f); logf_("mods %s: more than %d mods: %s not shown\n", kDir[g], MD_MAX, nm); m->nskip++; continue; }
+            long len = -1;
+            if (!fseek(f, 0, SEEK_END)) len = ftell(f);
+            char* buf = len > 0 && len <= MD_JSON_MAX && !fseek(f, 0, SEEK_SET) ? malloc((size_t)len) : NULL;
+            const int got = buf && fread(buf, 1, (size_t)len, f) == (size_t)len;
+            fclose(f);
+            if (!got) { free(buf); logf_("mods %s: %s/mod.json: %s: skipped\n", kDir[g], nm, len <= 0 ? "empty" : len > MD_JSON_MAX ? "too big" : "can't read it"); m->nskip++; continue; }
+            md_item_t* it = &m->it[m->n];
+            memset(it, 0, sizeof *it);
+            md_meta_t mt; memset(&mt, 0, sizeof mt);
+            it->pool_at = s_md_pool_n;
+            long at = 0;
+            const char* err = md_parse(buf, (size_t)len, it, &mt, &at);
+            free(buf);
+            const char* why = err;
+            if (!why && mt.game[0] && strcmp(mt.game, kDir[g])) why = "made for another game";
+            if (!why && md_ieq(mt.status, "refused")) why = "status refused (nothing in it applies)";
+            if (why) {
+                if (err) logf_("mods %s: %s/mod.json: %s (byte %ld): skipped\n", kDir[g], nm, err, at);
+                else logf_("mods %s: %s: %s (%s): skipped\n", kDir[g], nm, why, mt.game);
+                s_md_pool_n = it->pool_at; m->nskip++; continue;
+            }
+            if (g == 0 && m->edition[0] && mt.edition[0] && strcmp(mt.edition, m->edition)) {   /* (the other edition's: hidden, counted) */
+                s_md_pool_n = it->pool_at; m->nother_ed++; continue;
+            }
+            if (mt.id[0] && strcmp(mt.id, nm)) logf_("mods %s: %s/mod.json says id '%s': the folder's name is used\n", kDir[g], nm, mt.id);
+            snprintf(it->id, sizeof it->id, "%s", nm);
+            if (!it->name[0]) snprintf(it->name, sizeof it->name, "%s", nm);
+            it->kind = MK_MOD;
+            int light;
+            it->sec = (uint8_t)md_sec_of(mt.cat, &light);
+            it->light = (uint8_t)light;
+            it->partial = md_ieq(mt.status, "partial");
+            if (light) {
+                static const char* const pre[] = { "lightning colour: ", "lightning color: " };
+                for (int k = 0; k < 2; k++) {
+                    const size_t n = strlen(pre[k]);
+                    char head[24]; snprintf(head, sizeof head, "%.*s", (int)n, it->name);
+                    if (strlen(it->name) > n && md_ieq(head, pre[k])) { memmove(it->name, it->name + n, strlen(it->name + n) + 1); break; }
+                }
+                if (it->name[0] >= 'a' && it->name[0] <= 'z') it->name[0] = (char)(it->name[0] - 32);
+                if (!it->swk) md_swatch_guess(it);
+            }
+            m->n++; m->nmods++;
+        }
+        closedir(d);
+    }
+    /* built-in presets (2026-11-17): the colour presets are the in-game wheel's colours (nothing of the game is
+     * replaced), so they need no mods/lightning_<name> folder: each one missing from the folders is added here. */
+    {
+        static const struct { const char* n; const char* name; int h; } kPre[] = {
+            { "red", "Red", 0 }, { "orange", "Orange", 30 }, { "yellow", "Yellow", 60 }, { "lime", "Lime", 90 }, { "green", "Green", 120 },
+            { "mint", "Mint", 150 }, { "cyan", "Cyan", 180 }, { "azure", "Azure", 210 }, { "blue", "Blue", 240 }, { "violet", "Violet", 270 },
+            { "magenta", "Magenta", 300 }, { "rose", "Rose", 330 }, { "white", "White", -2 } };
+        for (size_t k = 0; k < sizeof kPre / sizeof kPre[0]; k++) {
+            char id[40]; snprintf(id, sizeof id, "lightning_%s", kPre[k].n);
+            int have = 0;
+            for (int i = 0; i < m->n && !have; i++) have = !strcmp(m->it[i].id, id);
+            if (have) continue;
+            if (m->n >= MD_ITEMS) break;
+            md_item_t* it = &m->it[m->n++];
+            memset(it, 0, sizeof *it);
+            snprintf(it->id, sizeof it->id, "%s", id);
+            snprintf(it->name, sizeof it->name, "%s", kPre[k].name);
+            snprintf(it->author, sizeof it->author, "inFAMOUS: ReCharged");
+            it->desc = "A preset of the in-game colour wheel (L3+R3): bolts, shock waves, glows and the energy meter. Nothing of the game is replaced.";
+            it->kind = MK_MOD; it->sec = MS_LIGHT; it->light = 1;
+            it->pool_at = s_md_pool_n;   /* no conflict strings */
+            it->swk = SW_ONE; it->sw[0] = kPre[k].h < 0 ? 0xF2F2F2 : md_hsv((float)kPre[k].h, 0.85f, 1.0f);
+        }
+    }
+    /* by name (the lightning colours: ours, lightning_*, first, by id) */
+    for (int a = 1; a < m->n; a++)
+        for (int b = a; b > 0; b--) {
+            const md_item_t* x = &m->it[b - 1]; const md_item_t* y = &m->it[b];
+            const int xl = x->light && !strncmp(x->id, "lightning_", 10), yl = y->light && !strncmp(y->id, "lightning_", 10);
+            const int c = xl != yl ? (xl ? -1 : 1) : xl ? strcmp(x->id, y->id) : md_icmp(x->name, y->name);
+            if (c <= 0) break;
+            md_item_t t = m->it[b - 1]; m->it[b - 1] = m->it[b]; m->it[b] = t;
+        }
+    /* the catalog's (2026-11-13: hidden by default, MD_CATALOG_GAMES 0, until the game programs carry them: on the
+     * console a listed but inactive "Black Lightning" read as a broken colour) */
+    for (size_t c = 0; c < sizeof kModCat / sizeof kModCat[0]; c++) {
+        if (!md_cat_shown(g, &kModCat[c])) continue;
+        if (m->n >= MD_ITEMS) { logf_("mods %s: catalog: more than %d entries\n", kDir[g], MD_CATMAX); break; }
+        md_item_t* it = &m->it[m->n++];
+        memset(it, 0, sizeof *it);
+        snprintf(it->id, sizeof it->id, "%s", kModCat[c].id);
+        snprintf(it->name, sizeof it->name, "%s", kModCat[c].name);
+        snprintf(it->author, sizeof it->author, "%s", kModCat[c].author);
+        it->desc = kModCat[c].desc; it->cat = kModCat[c].cat; it->risk = kModCat[c].risk; it->needs = kModCat[c].needs;
+        it->kind = kModCat[c].cheat ? MK_CHEAT : MK_GP;
+        it->sec = kModCat[c].cheat ? MS_CHEAT : MS_GP;
+        it->pool_at = -1;
+    }
+    /* conflicts (both ways) and requirements, now every id has its index */
+    for (int i = 0; i < m->n; i++) {   /* mods: their pool strings run to the next mod's (or the pool's end) */
+        if (m->it[i].kind != MK_MOD) continue;
+        int e = s_md_pool_n;
+        for (int k = 0; k < m->n; k++) if (m->it[k].kind == MK_MOD && m->it[k].pool_at > m->it[i].pool_at && m->it[k].pool_at < e) e = m->it[k].pool_at;
+        for (int q = m->it[i].pool_at; q < e; q += (int)strlen(s_md_pool + q) + 1) md_conf(m, i, s_md_pool + q);
+    }
+    for (int i = 0; i < m->n; i++) {
+        md_item_t* it = &m->it[i];
+        if (it->kind == MK_MOD) continue;
+        const md_cat_t* c = NULL;
+        for (size_t k = 0; k < sizeof kModCat / sizeof kModCat[0]; k++) if (!strcmp(kModCat[k].id, it->id) && !strcmp(kModCat[k].game, kDir[g])) { c = &kModCat[k]; break; }
+        if (!c) continue;
+        for (int pass = 0; pass < 2; pass++) {
+            const char* s = pass ? c->requires : c->conflicts;
+            while (s && *s) {
+                char id[64]; int n = 0;
+                while (*s && *s != ',') { if (n < 63) id[n++] = *s; s++; }
+                id[n] = 0;
+                if (*s) s++;
+                if (!id[0]) continue;
+                if (!pass) { md_conf(m, i, id); continue; }
+                const int r = md_find(m, id);
+                if (r < 0 || r == i) { logf_("mods %s: %s requires %s, which isn't here\n", kDir[g], it->id, id); continue; }
+                if (it->nreq < 4) it->req[it->nreq++] = (int16_t)r;
+            }
+        }
+    }
+    /* RECOMMENDED: <app>/<game>/mods/recommended.txt */
+    snprintf(p, sizeof p, "%s/recommended.txt", dir);
+    FILE* f = fopen(p, "r");
+    if (f) {
+        char l[160];
+        while (fgets(l, sizeof l, f)) {
+            char* s = l;
+            while (*s == ' ' || *s == '\t') s++;
+            s[strcspn(s, " \t\r\n#")] = 0;
+            const int i = s[0] ? md_find(m, s) : -1;
+            if (i >= 0 && !m->it[i].light) m->it[i].sec = MS_REC;
+        }
+        fclose(f);
+    }
+    /* the lightning selector's choices */
+    for (int i = 0; i < m->n; i++) if (m->it[i].light && m->nlight < MD_MAX) m->light[m->nlight++] = (int16_t)i;
+    /* the ini's choices (launcher_<game>.ini): unknown ids dropped, a later conflicting one dropped, a requirement
+     * missing turned on */
+    int pos = 0;
+    for (int k = 0; k < 3; k++) {
+        const char* s = s_md_list[g][k];
+        while (*s) {
+            char id[64]; int n = 0;
+            while (*s && *s != ',') { if (n < 63) id[n++] = *s; s++; }
+            id[n] = 0;
+            if (*s) s++;
+            if (!id[0]) continue;
+            const int i = md_find(m, id);
+            if (i < 0 && k == 0 && !m->dir_ok) continue;
+            if (i < 0 || (k == 0) != (m->it[i].kind == MK_MOD)) { logf_("mods %s: %s (launcher_%s.ini %s) isn't installed: dropped\n", kDir[g], id, kDir[g], kMdKey[k]); continue; }
+            md_item_t* it = &m->it[i];
+            if (it->on) continue;
+            if (it->light && m->light_on >= 0) { logf_("mods %s: %s: a second lightning colour: dropped\n", kDir[g], id); continue; }
+            if (it->light) m->light_on = i;
+            if (it->light && md_preset_hue(it->id) != -100) {   /* (an ini from before 2026-11-14 had it as a mod) */
+                s_lt_hue[g] = md_preset_hue(it->id);
+                logf_("mods %s: %s is now a colour of the in-game wheel (lightning_hue %d), no longer a file pack\n", kDir[g], id, s_lt_hue[g]);
+                continue;
+            }
+            it->on = 1; it->ord = ++pos;
+        }
+    }
+    m->ord = pos;
+    for (int o = 1; o <= pos; o++)
+        for (int i = 0; i < m->n; i++) {
+            if (!m->it[i].on || m->it[i].ord != o) continue;
+            for (int j = 0; j < m->n; j++)
+                if (m->it[j].on && m->it[j].ord < o && md_confl(m, i, j)) {
+                    logf_("mods %s: %s conflicts with %s: dropped\n", kDir[g], m->it[i].id, m->it[j].id);
+                    m->it[i].on = 0; if (m->light_on == i) m->light_on = -1;
+                    break;
+                }
+        }
+    for (int i = 0; i < m->n; i++)
+        for (int r = 0; m->it[i].on && r < m->it[i].nreq; r++) {
+            const int q = m->it[i].req[r];
+            if (m->it[q].on) continue;
+            if (md_blocker(m, q, 0) < 0) { m->it[q].on = 1; m->it[q].ord = ++m->ord; logf_("mods %s: %s turned on (%s needs it)\n", kDir[g], m->it[q].id, m->it[i].id); }
+            else { m->it[i].on = 0; logf_("mods %s: %s dropped (needs %s, which conflicts)\n", kDir[g], m->it[i].id, m->it[q].id); }
+        }
+    if (m->light_on < 0 && (s_lt_hue[g] >= 0 || s_lt_hue[g] == -2))   /* the wheel's colour is one of the presets: shown as that one */
+        for (int q = 0; q < m->nlight; q++) if (md_preset_hue(m->it[m->light[q]].id) == s_lt_hue[g]) { m->light_on = m->light[q]; break; }
+    md_store(g);
+    /* the rows: LIGHTNING COLOUR (one selector), then each section's */
+    for (int s = 0; s < MD_NSEC; s++) {
+        int any = 0;
+        if (s == MS_ONLINE) continue;
+        if (s == MS_LIGHT) any = 1;   /* (launch2: always, for the in-game colour wheel's DEFAULT / WHEEL) */
+        if (s == MS_CHEAT) any = 1;   /* (2026-11-14) its heading alone: where the cheats are now (the quick menu) */
+        else for (int i = 0; i < m->n && !any; i++) any = !m->it[i].light && m->it[i].sec == s;
+        if (!any) continue;
+        m->row[m->nrow++] = (int16_t)(-1 - s);
+        if (s == MS_LIGHT) {
+            m->row[m->nrow++] = MD_ROW_LIGHT;
+            if (g != 0) { m->row[m->nrow++] = (int16_t)(-1 - MS_ONLINE); m->row[m->nrow++] = MD_ROW_ONLINE; m->row[m->nrow++] = MD_ROW_NAME; }   /* ONLINE: inFAMOUS 2 / FoB */
+            continue;
+        }
+        for (int i = 0; i < m->n; i++) if (!m->it[i].light && m->it[i].sec == s) m->row[m->nrow++] = (int16_t)i;
+    }
+    logf_("mods %s: %d mods (%d lightning colours), %d catalog entries, %d skipped, %d for the other edition%s%s\n", kDir[g], m->nmods, m->nlight,
+          m->n - m->nmods, m->nskip, m->nother_ed, m->edition[0] ? ", edition " : "", m->edition);
+}
+static md_game_t* md_get(int g)
+{
+    if (!s_md[g].loaded) md_load(g);
+    return &s_md[g];
+}
+static int md_selectable(const md_game_t* m, int r) { return r >= 0 && r < m->nrow && (m->row[r] >= 0 || m->row[r] == MD_ROW_LIGHT || m->row[r] == MD_ROW_ONLINE || m->row[r] == MD_ROW_NAME); }
+static int md_head(int v) { return v < 0 && v >= -MD_NSEC; }   /* (a row that is a section's heading) */
+static void md_fix_sel(const md_game_t* m)
+{
+    if (md_selectable(m, MD.sel)) return;
+    int r = MD.sel < 0 ? 0 : MD.sel >= m->nrow ? m->nrow - 1 : MD.sel;
+    for (int k = r; k < m->nrow; k++) if (md_selectable(m, k)) { MD.sel = k; return; }
+    for (int k = r; k >= 0; k--) if (md_selectable(m, k)) { MD.sel = k; return; }
+    MD.sel = 0;
+}
+/* 1: no file colour pack on for g (launcher_<game>.ini / launcher.ini lightning_live: the in-game colour wheel works) */
+static int md_lt_live(int g)
+{
+    if (!s_md[g].loaded && !s_md_list[g][0][0]) return 1;   /* (no texture mod on at all) */
+    const md_game_t* m = md_get(g);
+    return m->light_on < 0 || md_preset_hue(m->it[m->light_on].id) != -100;   /* (a preset is the wheel's own colour) */
+}
+static int md_light_row(void) { const md_game_t* m = &s_md[MD.game]; return m->loaded && MD.sel >= 0 && MD.sel < m->nrow && m->row[MD.sel] == MD_ROW_LIGHT; }
+
+/* ---- turning things on and off ---- */
+static void md_append(char* also, size_t n, const char* name)
+{
+    const size_t k = strlen(also);
+    if (k + 4 < n) snprintf(also + k, n - k, "%s%s", k ? ", " : "", name);
+}
+/* i on, with what it requires; -1 when it can't be: *blk the item in the way, *req the requirement that couldn't (-1: i) */
+static int md_on(md_game_t* m, int i, char* also, size_t an, int depth, int* blk, int* req)
+{
+    md_item_t* it = &m->it[i];
+    if (it->on) return 0;
+    if (depth > 4) return -1;
+    const int b = md_blocker(m, i, it->light);
+    if (b >= 0) { *blk = b; if (depth) *req = i; return -1; }
+    for (int r = 0; r < it->nreq; r++) {
+        const int q = it->req[r];
+        if (m->it[q].on) continue;
+        if (md_on(m, q, also, an, depth + 1, blk, req)) return -1;
+        md_append(also, an, m->it[q].name);
+    }
+    if (it->light) { if (m->light_on >= 0 && m->light_on != i) m->it[m->light_on].on = 0; m->light_on = i; }
+    it->on = 1; it->ord = ++m->ord;
+    return 0;
+}
+static void md_off(md_game_t* m, int i, char* also, size_t an, int depth)
+{
+    m->it[i].on = 0;
+    if (m->light_on == i) m->light_on = -1;
+    if (depth > 4) return;
+    for (int j = 0; j < m->n; j++)   /* (what needs it goes off too) */
+        for (int r = 0; m->it[j].on && r < m->it[j].nreq; r++)
+            if (m->it[j].req[r] == i) { md_append(also, an, m->it[j].name); md_off(m, j, also, an, depth + 1); }
+}
+static void md_say(const char* msg) { snprintf(MD.msg, sizeof MD.msg, "%s", msg); MD.msg_t = M.time; }
+static void md_changed(int g) { md_store(g); settings_save(); }
+static void md_toggle(int g, int i)
+{
+    md_game_t* m = &s_md[g];
+    char also[200] = "", msg[320];
+    if (m->it[i].on) {
+        md_off(m, i, also, sizeof also, 0);
+        if (also[0]) { snprintf(msg, sizeof msg, T("Also turned off: %s", "Também desligado: %s"), also); md_say(msg); }
+    } else {
+        uint8_t was[MD_ITEMS]; int ord[MD_ITEMS];
+        for (int k = 0; k < m->n; k++) { was[k] = m->it[k].on; ord[k] = m->it[k].ord; }
+        const int ord0 = m->ord, light0 = m->light_on;
+        int blk = -1, req = -1;
+        if (md_on(m, i, also, sizeof also, 0, &blk, &req)) {
+            for (int k = 0; k < m->n; k++) { m->it[k].on = was[k]; m->it[k].ord = ord[k]; }
+            m->ord = ord0; m->light_on = light0;
+            if (blk < 0) return;
+            if (req >= 0) snprintf(msg, sizeof msg, T("Needs %s: turn off %s first.", "Precisa de %s: desligue %s primeiro."), m->it[req].name, m->it[blk].name);
+            else snprintf(msg, sizeof msg, T("Turn off %s first.", "Desligue %s primeiro."), m->it[blk].name);
+            md_say(msg);
+            return;
+        }
+        if (also[0]) { snprintf(msg, sizeof msg, T("Also turned on: %s", "Também ligado: %s"), also); md_say(msg); }
+    }
+    logf_("mods %s: %s %s\n", kDir[g], m->it[i].id, m->it[i].on ? "on" : "off");
+    md_changed(g);
+}
+/* the lightning selector: d +1 the next colour, -1 the one before (DEFAULT between the last and the first); a colour
+ * that conflicts with something on (not a colour) is passed over */
+static void md_light_step(int g, int d)
+{
+    md_game_t* m = &s_md[g];
+    if (!m->nlight) return;
+    int pos = -1;
+    for (int k = 0; k < m->nlight; k++) if (m->light[k] == m->light_on) pos = k;
+    for (int tries = 0; tries <= m->nlight; tries++) {
+        pos += d;
+        if (pos >= m->nlight) pos = -1;
+        if (pos < -1) pos = m->nlight - 1;
+        if (pos < 0 || md_preset_hue(m->it[m->light[pos]].id) != -100 || md_blocker(m, m->light[pos], 1) < 0) break;
+    }
+    const int want = pos < 0 ? -1 : m->light[pos];
+    if (want == m->light_on && (want >= 0 || s_lt_hue[g] == -1)) return;
+    if (m->light_on >= 0) m->it[m->light_on].on = 0;
+    m->light_on = want;
+    const int ph = want >= 0 ? md_preset_hue(m->it[want].id) : -100;
+    if (want >= 0 && ph == -100) { m->it[want].on = 1; m->it[want].ord = ++m->ord; }   /* a pack (dark, two-tone, a community colour) */
+    if (want < 0) s_lt_hue[g] = -1;        /* DEFAULT: the game's own colour */
+    else if (ph != -100) s_lt_hue[g] = ph; /* a preset: the wheel's colour, nothing replaced */
+    logf_("mods %s: lightning colour %s\n", kDir[g], want >= 0 ? m->it[want].id : "default");
+    md_changed(g);
+}
+static void md_all_off(int g)
+{
+    md_game_t* m = &s_md[g];
+    for (int i = 0; i < m->n; i++) m->it[i].on = 0;
+    m->light_on = -1; s_lt_hue[g] = -1;
+    s_md_list[g][0][0] = 0;   /* (with the folder missing too) */
+    s_online[g] = 0;          /* (the community server too; its player name kept) */
+    char msg[200]; snprintf(msg, sizeof msg, T("Everything is off for %s.", "Tudo desligado em %s."), kName[g]); md_say(msg);
+    logf_("mods %s: everything off\n", kDir[g]);
+    md_changed(g);
+}
+/* ONLINE > COMMUNITY MISSIONS SERVER (inFAMOUS 2 / FoB): X once shows the notice (M.confirm_game MD_OCONFIRM + g, as
+ * SQUARE's), X again within confirming()'s time turns it on; off with one X. A player name is made when there is none. */
+static void md_online_x(int g)
+{
+    if (g == 0) return;
+    if (s_online[g]) {
+        s_online[g] = 0; M.confirm_t = -100;
+        md_say(T("Community missions server off.", "Servidor de missões da comunidade desligado."));
+        logf_("mods %s: online off\n", kDir[g]);
+        settings_save();
+        return;
+    }
+    if (!md_name_ok(s_online_name[g])) md_name_new(g);
+    if (confirming() && M.confirm_game == MD_OCONFIRM + g) {
+        s_online[g] = 1; M.confirm_t = -100;
+        md_say(T("Community missions server on. Used the next time the game starts.", "Servidor de missões da comunidade ligado. Vale na próxima vez que o jogo iniciar."));
+        logf_("mods %s: online on (%s)\n", kDir[g], s_online_name[g]);
+        settings_save();
+    } else { M.confirm_t = M.time; M.confirm_game = MD_OCONFIRM + g; }
+}
+/* ONLINE > PLAYER NAME: the launcher's own name editor (no system keyboard). A grid of the allowed characters, then
+ * DEL / RANDOM / OK; D-pad moves, X adds (or does the cell's action), SQUARE deletes the last, TRIANGLE or OK saves,
+ * O cancels. 3..16 characters, the first a letter. Saved for inFAMOUS 2 and Festival of Blood both. It has the pad
+ * while open (main's loop: md_ne_open). */
+static const char kNeChars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
+enum { NE_COLS = 16, NE_NCH = 64, NE_DEL = 64, NE_RAND = 65, NE_OK = 66 };
+static struct { int open, cur; char buf[MD_NAME + 1]; char msg[160]; float msg_t; } NE = { .msg_t = -100 };
+static int md_ne_open(void) { return NE.open; }
+static void md_ne_say(const char* s) { snprintf(NE.msg, sizeof NE.msg, "%s", s); NE.msg_t = M.time; }
+static int md_ne_letter(char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
+static void md_ne_start(int g)
+{
+    if (g == 0) return;
+    md_name_share();
+    snprintf(NE.buf, sizeof NE.buf, "%s", md_name_ok(s_online_name[g]) && strlen(s_online_name[g]) <= MD_NAME ? s_online_name[g] : "");
+    NE.open = 1; NE.cur = 0; NE.msg_t = -100; M.confirm_t = -100;
+}
+static void md_ne_save(void)
+{
+    const size_t n = strlen(NE.buf);
+    if (n < 3) { md_ne_say(T("At least 3 characters.", "Pelo menos 3 caracteres.")); return; }
+    if (!md_ne_letter(NE.buf[0])) { md_ne_say(T("The first character must be a letter.", "O primeiro caractere tem que ser uma letra.")); return; }
+    if (!md_name_ok(NE.buf)) return;
+    for (int g = 1; g < NGAMES; g++) snprintf(s_online_name[g], sizeof s_online_name[g], "%s", NE.buf);
+    NE.open = 0;
+    logf_("mods: online player name set to %s (if2, fob)\n", NE.buf);
+    settings_save();
+    char msg[200]; snprintf(msg, sizeof msg, T("Player name saved: %s", "Nome de jogador salvo: %s"), NE.buf); md_say(msg);
+}
+static void md_ne_input(uint32_t p)
+{
+    if (p & B_CIRCLE) { NE.open = 0; md_say(T("Player name not changed.", "Nome de jogador não mudado.")); return; }
+    if (p & B_TRIANGLE) { md_ne_save(); return; }
+    size_t n = strlen(NE.buf);
+    if (p & B_SQUARE) { if (n) NE.buf[n - 1] = 0; return; }
+    int c = NE.cur;
+    if (c < NE_NCH) {
+        int row = c / NE_COLS, col = c % NE_COLS;
+        if (p & B_LEFT) col = (col + NE_COLS - 1) % NE_COLS;
+        if (p & B_RIGHT) col = (col + 1) % NE_COLS;
+        c = row * NE_COLS + col;
+        if (p & B_UP) c = row > 0 ? c - NE_COLS : col < 5 ? NE_DEL : col < 11 ? NE_RAND : NE_OK;
+        else if (p & B_DOWN) c = row < NE_NCH / NE_COLS - 1 ? c + NE_COLS : col < 5 ? NE_DEL : col < 11 ? NE_RAND : NE_OK;
+    } else {
+        const int col = c == NE_DEL ? 2 : c == NE_RAND ? 8 : 13;
+        if (p & B_LEFT) c = c == NE_DEL ? NE_OK : c - 1;
+        if (p & B_RIGHT) c = c == NE_OK ? NE_DEL : c + 1;
+        if (p & B_UP) c = (NE_NCH / NE_COLS - 1) * NE_COLS + col;
+        else if (p & B_DOWN) c = col;
+    }
+    NE.cur = c;
+    if (!(p & B_CROSS)) return;
+    if (c < NE_NCH) {
+        const char ch = kNeChars[c];
+        if (n >= MD_NAME) { md_ne_say(T("16 characters at most.", "No máximo 16 caracteres.")); return; }
+        if (!n && !md_ne_letter(ch)) { md_ne_say(T("The first character must be a letter.", "O primeiro caractere tem que ser uma letra.")); return; }
+        NE.buf[n] = ch; NE.buf[n + 1] = 0;
+    } else if (c == NE_DEL) { if (n) NE.buf[n - 1] = 0; }
+    else if (c == NE_RAND) md_name_rand(NE.buf, sizeof NE.buf);
+    else md_ne_save();
+}
+static void md_input(uint32_t p)
+{
+    if (p & (B_LEFT | B_RIGHT)) {
+        MD.game = (MD.game + ((p & B_LEFT) ? NGAMES - 1 : 1)) % NGAMES;
+        MD.sel = 0; MD.scroll = 0; MD.msg_t = -100; M.confirm_t = -100;
+        md_fix_sel(md_get(MD.game));
+        return;
+    }
+    const int g = MD.game;
+    md_game_t* m = md_get(g);
+    md_fix_sel(m);
+    if (p & B_UP) { for (int k = MD.sel - 1; k >= 0; k--) if (md_selectable(m, k)) { MD.sel = k; break; } M.confirm_t = -100; }
+    if (p & B_DOWN) { for (int k = MD.sel + 1; k < m->nrow; k++) if (md_selectable(m, k)) { MD.sel = k; break; } M.confirm_t = -100; }
+    if (!md_selectable(m, MD.sel)) return;
+    const int r = m->row[MD.sel];
+    if (p & B_CROSS) { if (r == MD_ROW_NAME) md_ne_start(g); else if (r == MD_ROW_ONLINE) md_online_x(g); else if (r == MD_ROW_LIGHT) md_light_step(g, 1); else md_toggle(g, r); }
+    if ((p & B_TRIANGLE) && r == MD_ROW_LIGHT) md_light_step(g, -1);
+    if (p & B_SQUARE) {
+        if (confirming() && M.confirm_game == MD_CONFIRM + g) { md_all_off(g); M.confirm_t = -100; }
+        else { M.confirm_t = M.time; M.confirm_game = MD_CONFIRM + g; }
+    }
+}
+
+/* ---- drawing ---- */
+static const char* md_sec_name(int s)
+{
+    switch (s) {
+    case MS_LIGHT: return T("LIGHTNING COLOUR", "COR DOS RAIOS");
+    case MS_REC: return T("RECOMMENDED", "RECOMENDADOS");
+    case MS_SKIN: return T("SKINS & OUTFITS", "SKINS E ROUPAS");
+    case MS_UI: return T("UI & BUTTONS", "INTERFACE E BOTÕES");
+    case MS_WORLD: return T("ENEMIES & WORLD", "INIMIGOS E MUNDO");
+    case MS_GP: return T("GAMEPLAY", "JOGABILIDADE");
+    case MS_CHEAT: return T("CHEATS: IN GAME, PRESS L3+R3", "TRAPAÇAS: NO JOGO, APERTE L3+R3");
+    case MS_ONLINE: return "ONLINE";
+    default: return T("OTHER", "OUTROS");
+    }
+}
+/* s cut to maxw pixels with an ellipsis (whole letters) */
+static const char* md_fit(const font_t* f, int px, const char* s, int maxw, char* out, size_t n)
+{
+    if (text_w(f, px, s) <= maxw || n < 8) return s;
+    const int ew = text_w(f, px, "\xE2\x80\xA6");
+    const char* q = s;
+    int w = 0;
+    while (*q) {
+        const char* nx = q;
+        const int cw = glyph(f, px, utf8(&nx))->adv;
+        if (w + cw + ew > maxw || (size_t)(nx - s) + 4 > n) break;
+        w += cw; q = nx;
+    }
+    size_t k = (size_t)(q - s);
+    while (k && s[k - 1] == ' ') k--;
+    memcpy(out, s, k); memcpy(out + k, "\xE2\x80\xA6", 4);
+    return out;
+}
+static void md_swatch(float x, float y, float w, float h, const md_item_t* it, int a)
+{
+    if (!it) {   /* DEFAULT: the game's own, an outline with a stroke through */
+        rrect(x, y, x + w, y + h, 4, 2, C_GREY, a);
+        for (int k = 2; k < (int)w - 2; k++) rect((int)(x + k), (int)(y + h - 3 - (h - 6) * k / w), 2, 2, C_GREY, a);
+        return;
+    }
+    if (it->swk == SW_NONE) { rrect(x, y, x + w, y + h, 4, 1.5f, C_GREY, a); return; }
+    if (it->swk == SW_RAINBOW) {
+        static const uint32_t rb[6] = { 0xE8302A, 0xFF8A1E, 0xF5D428, 0x36D05A, 0x3C8CFF, 0x9A4DFF };
+        const int x0 = s_cx0, x1 = s_cx1, y0 = s_cy0, y1 = s_cy1;
+        for (int k = 0; k < 6; k++) {
+            clip((int)(x + w * k / 6), y0, (int)(x + w * (k + 1) / 6), y1);
+            if (s_cx0 < x0) s_cx0 = x0; if (s_cx1 > x1) s_cx1 = x1;
+            rrect(x, y, x + w, y + h, 4, 0, rb[k], a);
+            s_cx0 = x0; s_cx1 = x1;
+        }
+        return;
+    }
+    rrect(x, y, x + w, y + h, 4, 0, it->sw[0], a);
+    if (it->swk == SW_TWO) {
+        const int x0 = s_cx0;
+        s_cx0 = (int)(x + w / 2) > x0 ? (int)(x + w / 2) : x0;
+        rrect(x, y, x + w, y + h, 4, 0, it->sw[1], a);
+        s_cx0 = x0;
+    }
+    if (((it->sw[0] >> 16 & 255) + (it->sw[0] >> 8 & 255) + (it->sw[0] & 255)) < 120) rrect(x, y, x + w, y + h, 4, 1.5f, C_GREY, a);   /* (black on dark) */
+}
+/* DEFAULT's swatch: the in-game colour wheel's colour (launcher_<game>.ini lightning_hue) when one is picked */
+static void md_swatch_def(float x, float y, float w, float h, int g, int a)
+{
+    const int hue = s_lt_hue[g];
+    if (hue >= 0) rrect(x, y, x + w, y + h, 4, 0, md_hsv((float)hue, 1, 1), a);
+    else if (hue == -2) rrect(x, y, x + w, y + h, 4, 0, 0xF2F2F2, a);
+    else md_swatch(x, y, w, h, NULL, a);
+}
+/* DEFAULT's name: DEFAULT, or the wheel's colour (WHEEL: WHITE / WHEEL: 300°) */
+static const char* md_def_name(int g, char* out, size_t n)
+{
+    const int hue = s_lt_hue[g];
+    if (hue == -2) snprintf(out, n, "%s", T("WHEEL: WHITE", "RODA: BRANCO"));
+    else if (hue >= 0) snprintf(out, n, T("WHEEL: %d\xC2\xB0", "RODA: %d\xC2\xB0"), hue);
+    else snprintf(out, n, "%s", T("DEFAULT", "PADRÃO"));
+    return out;
+}
+static float s_md_fa = 1;   /* (rows half out of the list: faded) */
+static int MA(int a) { return (int)(PA(a) * s_md_fa); }
+static void md_check(float x, float y, int on, int dim, int sel)
+{
+    const uint32_t c = dim ? 0x6A6660 : on || sel ? C_WHITE : C_GREY;
+    if (on) {
+        rrect(x, y, x + 26, y + 26, 5, 0, C_ACCENT, MA(255));
+        for (int k = 0; k < 6; k++) rect((int)(x + 6 + k), (int)(y + 12 + k), 3, 3, 0x061018, MA(255));
+        for (int k = 0; k < 10; k++) rect((int)(x + 11 + k), (int)(y + 17 - k), 3, 3, 0x061018, MA(255));
+    } else rrect(x, y, x + 26, y + 26, 5, 2, c, MA(dim ? 160 : 255));
+}
+static void draw_mods(void)
+{
+    for (int k = 0; k < NGAMES; k++) md_get(k);
+    const int g = MD.game;
+    md_game_t* m = &s_md[g];
+    md_fix_sel(m);
+    const float games_left = 140 + PDX(), L = 580 + PDX(), R = W - 150 + PDX(), top = 190, bottom = 790;
+    char buf[400], cut[200];
+    /* the games, as SETTINGS' (what is on in each under its name), and what was skipped */
+    spaced(&F_body, 19, games_left, top, C_ACCENT, PA(255), T("GAMES", "JOGOS"), 3);
+    float y = top + 46;
+    for (int k = 0; k < NGAMES; k++) {
+        const int sel = k == g;
+        const img_t* logo = sel ? &s_logo_set[k] : &s_logo_set_small[k];
+        const int h = sel ? kLogoSetH[k] : kLogoSetSmallH[k];
+        if (sel) rect((int)(games_left - 38), (int)(y + h * 0.12f), 14, (int)(h * 0.76f), C_ACCENT, PA(255));
+        if (logo->px) img_draw(logo, (int)games_left, (int)y, PA(sel ? 255 : 170));
+        else textt(&F_item, h * 2 / 3, games_left, y, sel ? C_WHITE : C_GREY, PA(255), kName[k]);
+        y += h + 6;
+        int on = 0;
+        for (int i = 0; i < s_md[k].n; i++) on += s_md[k].it[i].on;
+        if (on) { snprintf(buf, sizeof buf, T("%d ON", "%d LIGADOS"), on); textt(&F_body, 20, games_left, y, sel ? C_ACCENT : C_GREY, PA(255), buf); }
+        y += 26 + 18;
+    }
+    y += 10;
+    if (m->nskip) {
+        snprintf(buf, sizeof buf, T("%d mod(s) skipped: unreadable or not for this game (see logs/launcher.log).", "%d mod(s) ignorado(s): ilegível ou não é deste jogo (veja logs/launcher.log)."), m->nskip);
+        y += text_wrap(&F_body, 20, games_left, y, 340, 0xE0A040, PA(255), buf, 1) + 12;
+    }
+    if (m->nother_ed) {
+        snprintf(buf, sizeof buf, T("%d mod(s) for the other edition hidden.", "%d mod(s) da outra edição ocultado(s)."), m->nother_ed);
+        y += text_wrap(&F_body, 20, games_left, y, 340, C_GREY, PA(255), buf, 1) + 12;
+    }
+    rect((int)(L - 60), 190, 1, (int)(bottom - 190), 0xFFFFFF, PA(40));
+    /* the list: where each row goes (scrolled so the focused one stays in view) */
+    float ry[MD_ITEMS + MD_NSEC + 3], yy = 0;
+    char empty[600] = "";
+    float empty_h = 0;
+    if (!m->nmods) {
+        char ed[80] = "";
+        if (g == 0 && m->edition[0]) snprintf(ed, sizeof ed, T(" Only mods made for your edition (%s) are shown.", " Só aparecem os mods feitos para a sua edição (%s)."),
+                                              !strcmp(m->edition, "eu") ? T("EUROPE", "EUROPA") : "USA");
+        snprintf(empty, sizeof empty, T("No texture mods for %s yet.\nPut each mod in its own folder in PPSA95463/%s/mods/ (its mod.json and pack files), then open this page again.%s",
+                                        "Ainda não há mods de textura para %s.\nColoque cada mod numa pasta própria em PPSA95463/%s/mods/ (o mod.json e os arquivos de pacote) e abra esta página de novo.%s"),
+                 kName[g], kDir[g], ed);
+        empty_h = (float)text_wrap(&F_body, 26, 0, 0, (int)(R - L - 32), 0, 0, empty, 0) + 24 + 30;
+        yy = empty_h;
+    }
+    for (int r = 0; r < m->nrow; r++) {
+        const int v = m->row[r];
+        if (md_head(v)) { if (r) yy += 16; ry[r] = yy; yy += 40; }
+        else { ry[r] = yy; yy += v == MD_ROW_LIGHT ? 96 : 48; }
+    }
+    const float view = bottom - top, most = yy - view > 0 ? yy - view : 0;
+    if (md_selectable(m, MD.sel)) {
+        float want = ry[MD.sel] - view * 0.42f;
+        if (MD.sel <= 2) want = 0;   /* (the first rows: the top, with the empty-state panel) */
+        want = want < 0 ? 0 : want > most ? most : want;
+        MD.scroll += (want - MD.scroll) * 0.25f;
+        if (fabsf(want - MD.scroll) < 0.5f) MD.scroll = want;
+    }
+    clip(0, (int)(top - 4), W, (int)bottom);
+    if (empty[0]) {
+        const float py = top + 12 - MD.scroll;
+        const int th = text_wrap(&F_body, 26, 0, 0, (int)(R - L - 32), 0, 0, empty, 0);
+        rrect(L - 16, py - 12, R, py + th + 12, 6, 0, 0x06101C, PA(225));
+        rect((int)(L - 16), (int)(py - 12), 6, th + 24, C_ACCENT, PA(255));
+        text_wrap(&F_body, 26, L + 6, py, (int)(R - L - 32), C_WHITE, PA(255), empty, 1);
+    }
+    for (int r = 0; r < m->nrow; r++) {
+        const int v = m->row[r];
+        const float ty = top + ry[r] - MD.scroll;
+        if (ty > bottom || ty + 100 < top) continue;
+        {   const float rh = v == MD_ROW_LIGHT ? 96.0f : md_head(v) ? 40.0f : 48.0f;
+            float vis = ty < top ? 1 - (top - ty) / rh : 1;
+            if (ty + rh > bottom && (bottom - ty) / rh < vis) vis = (bottom - ty) / rh;
+            vis = vis < 0 ? 0 : vis > 1 ? 1 : vis;
+            s_md_fa = vis * vis; }
+        const int sel = r == MD.sel;
+        if (md_head(v)) { spaced(&F_body, 19, L, ty + 8, C_ACCENT, MA(255), md_sec_name(-1 - v), 3); continue; }
+        if (sel) rect((int)(L - 30), (int)(ty + 9), 10, 26, C_ACCENT, MA(255));
+        if (v == MD_ROW_LIGHT) {
+            const md_item_t* cur = m->light_on >= 0 ? &m->it[m->light_on] : NULL;
+            char dn[64];
+            if (cur) md_swatch(L, ty + 6, 60, 32, cur, MA(255)); else md_swatch_def(L, ty + 6, 60, 32, g, MA(255));
+            int pos = 0;
+            for (int k = 0; k < m->nlight; k++) if (m->light[k] == m->light_on) pos = k + 1;
+            snprintf(buf, sizeof buf, "<  %s  >", cur ? cur->name : md_def_name(g, dn, sizeof dn));
+            textt(&F_item, 32, L + 80, ty + 4, sel ? C_ACCENT : C_GREY, MA(255), md_fit(&F_item, 32, buf, (int)(R - L - 320), cut, sizeof cut));
+            snprintf(buf, sizeof buf, T("Colour %d of %d", "Cor %d de %d"), pos, m->nlight);
+            if (pos) textt(&F_body, 20, R - text_w(&F_body, 20, buf), ty + 12, C_GREY, MA(255), buf);
+            /* every choice, the chosen one outlined */
+            const int n = m->nlight + 1;
+            float cw = (R - L) / n; if (cw > 30) cw = 30;
+            for (int k = 0; k < n; k++) {
+                const float sx = L + k * cw, sy = ty + 54;
+                const int chosen = (k == 0 && m->light_on < 0) || (k > 0 && m->light[k - 1] == m->light_on);
+                const int blocked = k > 0 && md_preset_hue(m->it[m->light[k - 1]].id) == -100 && md_blocker(m, m->light[k - 1], 1) >= 0;
+                if (k) md_swatch(sx + 3, sy + 3, cw - 8, 22, &m->it[m->light[k - 1]], MA(blocked ? 70 : 230));
+                else md_swatch_def(sx + 3, sy + 3, cw - 8, 22, g, MA(230));
+                if (chosen) rrect(sx, sy, sx + cw - 2, sy + 28, 5, 2, C_WHITE, MA(255));
+            }
+            continue;
+        }
+        if (v == MD_ROW_NAME) {   /* PLAYER NAME: the name on the right */
+            const int has = md_name_ok(s_online_name[g]);
+            const char* nm = has ? s_online_name[g] : T("NONE YET", "AINDA NENHUM");
+            textt(&F_body, 21, R - text_w(&F_body, 21, nm), ty + 12, has ? C_ACCENT : C_GREY, MA(255), nm);
+            textt(&F_body, 27, L + 44, ty + 6, sel ? C_WHITE : C_GREY, MA(255), T("PLAYER NAME", "NOME DE JOGADOR"));
+            continue;
+        }
+        if (v == MD_ROW_ONLINE) {   /* COMMUNITY MISSIONS SERVER: ON / OFF on the right */
+            const int on = s_online[g];
+            md_check(L, ty + 9, on, 0, sel);
+            const char* st = on ? T("ON", "LIGADO") : T("OFF", "DESLIGADO");
+            textt(&F_body, 21, R - text_w(&F_body, 21, st), ty + 12, on ? C_ACCENT : C_GREY, MA(255), st);
+            textt(&F_body, 27, L + 44, ty + 6, sel ? C_WHITE : on ? C_TEXT : C_GREY, MA(255),
+                  md_fit(&F_body, 27, T("COMMUNITY MISSIONS SERVER", "SERVIDOR DE MISSÕES DA COMUNIDADE"), (int)(R - L - 44 - 200), cut, sizeof cut));
+            continue;
+        }
+        const md_item_t* it = &m->it[v];
+        const int blk = it->on ? -1 : md_blocker(m, v, 0);
+        md_check(L, ty + 9, it->on, blk >= 0, sel);
+        /* the right: why it's greyed, or who made it */
+        const char* right = NULL;
+        if (blk >= 0) {
+            snprintf(buf, sizeof buf, it->kind == MK_MOD && m->it[blk].kind == MK_MOD ? T("uses the same textures as %s", "usa as mesmas texturas que %s")
+                                                                                     : T("can't be on with %s", "não funciona junto com %s"), m->it[blk].name);
+            right = buf;
+        } else if (it->kind != MK_MOD && it->cat && it->cat[0]) right = it->cat;
+        else if (it->author[0]) { snprintf(buf, sizeof buf, T("by %s", "por %s"), it->author); right = buf; }
+        int rw = 0;
+        if (right) {
+            const char* rs = md_fit(&F_body, 21, right, 520, cut, sizeof cut);
+            rw = text_w(&F_body, 21, rs);
+            textt(&F_body, 21, R - rw, ty + 12, blk >= 0 ? 0xC0A070 : C_GREY, MA(255), rs);
+        }
+        const char* tag = it->partial ? T("PARTIAL", "PARCIAL") : NULL;
+        const int tw = tag ? text_w(&F_body, 17, tag) + 16 : 0;
+        char nm[200];
+        const char* name = md_fit(&F_body, 27, it->name, (int)(R - L - 44 - rw - 40 - (tw ? tw + 14 : 0)), nm, sizeof nm);
+        textt(&F_body, 27, L + 44, ty + 6, blk >= 0 ? 0x8A8680 : sel ? C_WHITE : it->on ? C_TEXT : C_GREY, MA(255), name);
+        if (tag) {
+            const float tx = L + 44 + text_w(&F_body, 27, name) + 14;
+            rrect(tx, ty + 12, tx + tw, ty + 36, 4, 1.5f, 0xE0A040, MA(255));
+            textt(&F_body, 17, tx + 8, ty + 15, 0xE0A040, MA(255), tag);
+        }
+    }
+    s_md_fa = 1;
+    unclip();
+    if (most > 0) {   /* where the list is */
+        const float th = view * view / (most + view), tpos = top + (view - th) * (MD.scroll / most);
+        rect((int)(R + 22), (int)top, 3, (int)view, 0xFFFFFF, PA(30));
+        rect((int)(R + 22), (int)tpos, 3, (int)th, C_ACCENT, PA(200));
+    }
+    /* under the list: the chosen row's details, then what just happened / SQUARE's question */
+    rect((int)L, (int)bottom + 10, (int)(R - L), 1, 0xFFFFFF, PA(40));
+    const float dy = bottom + 22;
+    clip(0, (int)dy - 4, W, H - 150);   /* (three lines of details at most, above the message line) */
+    if (md_selectable(m, MD.sel) && m->row[MD.sel] == MD_ROW_ONLINE) {   /* the server: what it is, its notice, the name */
+        char text[900];
+        const int ask = confirming() && M.confirm_game == MD_OCONFIRM + g;
+        textt(&F_item, 28, L, dy, ask ? 0xE0A040 : C_WHITE, PA(255), md_fit(&F_item, 28, T("COMMUNITY MISSIONS SERVER", "SERVIDOR DE MISSÕES DA COMUNIDADE"), (int)(R - L - 420), cut, sizeof cut));
+        if (ask) snprintf(text, sizeof text, "%s\n%s %s", T("User missions come from a fan-run server, not Sony (152.53.194.56). Your console's IP address and the player name below are sent to it. The connection is not verified. Play at your own risk.",
+                                                           "As missões de usuários vêm de um servidor de fãs, não da Sony (152.53.194.56). O endereço IP do seu console e o nome de jogador abaixo são enviados a ele. A conexão não é verificada. Jogue por sua conta e risco."),
+                          T("Player name:", "Nome de jogador:"), s_online_name[g]);
+        else if (s_online[g]) snprintf(text, sizeof text, T("User missions from the fan-run server 152.53.194.56 (not Sony).\nPlayer name: %s", "Missões de usuários do servidor de fãs 152.53.194.56 (não da Sony).\nNome de jogador: %s"), s_online_name[g]);
+        else if (s_online_name[g][0]) snprintf(text, sizeof text, T("User missions from a fan-run server (not Sony). Off: the game stays offline.\nPlayer name: %s", "Missões de usuários de um servidor de fãs (não da Sony). Desligado: o jogo fica offline.\nNome de jogador: %s"), s_online_name[g]);
+        else snprintf(text, sizeof text, "%s", T("User missions from a fan-run server (not Sony). Off: the game stays offline.", "Missões de usuários de um servidor de fãs (não da Sony). Desligado: o jogo fica offline."));
+        text_wrap(&F_body, 22, L, dy + 38, (int)(R - L), C_TEXT, PA(255), text, 1);
+    } else if (md_selectable(m, MD.sel) && m->row[MD.sel] == MD_ROW_NAME) {
+        char text[600];
+        textt(&F_item, 28, L, dy, C_WHITE, PA(255), T("PLAYER NAME", "NOME DE JOGADOR"));
+        if (md_name_ok(s_online_name[g])) snprintf(text, sizeof text, T("The name the community missions server gets, the same for inFAMOUS 2 and Festival of Blood. X: change it.\nPlayer name: %s",
+                                                                        "O nome que o servidor de missões da comunidade recebe, o mesmo para inFAMOUS 2 e Festival of Blood. X: mudar.\nNome de jogador: %s"), s_online_name[g]);
+        else snprintf(text, sizeof text, "%s", T("The name the community missions server gets, the same for inFAMOUS 2 and Festival of Blood. X: choose one (or one is made when you turn the server on).",
+                                                 "O nome que o servidor de missões da comunidade recebe, o mesmo para inFAMOUS 2 e Festival of Blood. X: escolher (ou um é criado ao ligar o servidor)."));
+        text_wrap(&F_body, 22, L, dy + 38, (int)(R - L), C_TEXT, PA(255), text, 1);
+    } else if (md_selectable(m, MD.sel)) {
+        const int v = m->row[MD.sel];
+        const md_item_t* it = v >= 0 ? &m->it[v] : m->light_on >= 0 ? &m->it[m->light_on] : NULL;
+        char text[900] = "";
+        size_t k = 0;
+#define MD_ADD(...) do { if (k < sizeof text) { const int w_ = snprintf(text + k, sizeof text - k, __VA_ARGS__); if (w_ > 0) k += (size_t)w_; } } while (0)
+        char dn[64];
+        const char* title = it ? it->name : md_def_name(g, dn, sizeof dn);
+        textt(&F_item, 28, L, dy, C_WHITE, PA(255), md_fit(&F_item, 28, title, (int)(R - L - 420), cut, sizeof cut));
+        if (it && it->author[0]) {
+            snprintf(buf, sizeof buf, T("by %s", "por %s"), it->author);
+            textt(&F_body, 20, L + text_w(&F_item, 28, title) + 20 > R - 400 ? R - 400 : L + text_w(&F_item, 28, title) + 20, dy + 8, C_GREY, PA(255), md_fit(&F_body, 20, buf, 400, cut, sizeof cut));
+        }
+        if (!it) MD_ADD("%s", T("The game's own colour, or the one you pick while playing: L3+R3, LIGHTNING. A colour wheel, changes on the spot.",
+                                "A cor original do jogo, ou a que você escolher jogando: L3+R3, LIGHTNING. Uma roda de cores, muda na hora."));
+        const int preset = it && v == MD_ROW_LIGHT && md_preset_hue(it->id) != -100;
+        if (preset) MD_ADD("%s", T("One of the in-game wheel's colours: nothing in the game's files is replaced, and you can change it while playing with L3+R3, LIGHTNING.",
+                                   "Uma das cores da roda do jogo: nada nos arquivos do jogo é trocado, e dá para mudar jogando com L3+R3, LIGHTNING."));
+        else if (it && v == MD_ROW_LIGHT) MD_ADD("%s\n", T("Fixed colour pack: the in-game colour wheel is off while this is selected.",
+                                                    "Pacote de cor fixa: a roda de cores do jogo fica desligada enquanto ele estiver escolhido."));
+        if (preset) {}
+        else if (it && it->desc) MD_ADD("%s", it->desc);
+        else if (it && it->note[0]) MD_ADD("%s", it->note);
+        if (it && it->partial) MD_ADD("%s%s", k ? "  " : "", T("Partly built: some of its textures don't match this game's version, so they are left out.",
+                                                               "Montado em parte: algumas texturas não batem com a versão deste jogo e ficaram de fora."));
+        if (v >= 0 && !it->on) {
+            const int b = md_blocker(m, v, 0);
+            if (b >= 0) { MD_ADD("%s", k ? "  " : ""); MD_ADD(it->kind == MK_MOD && m->it[b].kind == MK_MOD ? T("uses the same textures as %s", "usa as mesmas texturas que %s") : T("can't be on with %s", "não funciona junto com %s"), m->it[b].name); MD_ADD("."); }
+        }
+        if (it && it->needs && it->needs[0]) { MD_ADD("%s", k ? "  " : ""); MD_ADD(T("Needs: %s.", "Precisa de: %s."), it->needs); }
+        if (it && it->risk && it->risk[0]) { MD_ADD("%s", k ? "  " : ""); MD_ADD(T("Risk: %s.", "Risco: %s."), it->risk); }
+        for (int r = 0; it && v >= 0 && r < it->nreq; r++) { MD_ADD("%s", k ? "  " : ""); MD_ADD(T("Needs %s (turned on with it).", "Precisa de %s (ligado junto)."), m->it[it->req[r]].name); }
+        if (v == MD_ROW_LIGHT)
+            for (int q = 0; q < m->nlight; q++) {
+                const int b = md_preset_hue(m->it[m->light[q]].id) != -100 ? -1 : md_blocker(m, m->light[q], 1);
+                if (b >= 0) { MD_ADD("%s", k ? "  " : ""); MD_ADD(T("Some colours are skipped: they use the same textures as %s.", "Algumas cores são puladas: usam as mesmas texturas que %s."), m->it[b].name); break; }
+            }
+#undef MD_ADD
+        text_wrap(&F_body, 22, L, dy + 38, (int)(R - L), C_TEXT, PA(255), text, 1);
+    }
+    unclip();
+    const char* tail;
+    uint32_t tc = C_ACCENT;
+    if (confirming() && M.confirm_game == MD_OCONFIRM + g) tail = T("PRESS X AGAIN TO TURN ON", "APERTE X DE NOVO PARA LIGAR");
+    else if (confirming() && M.confirm_game == MD_CONFIRM + g) { snprintf(buf, sizeof buf, T("PRESS SQUARE AGAIN TO TURN EVERYTHING OFF FOR %s", "APERTE QUADRADO DE NOVO PARA DESLIGAR TUDO EM %s"), kName[g]); tail = buf; }
+    else if (M.time - MD.msg_t < 4.0f) tail = MD.msg;
+    else { tail = T("Saved as you change it. Used the next time the game starts.", "Salvo assim que você muda. Vale na próxima vez que o jogo iniciar."); tc = C_DIM; }
+    textt(&F_body, 22, L, H - 144, tc, PA(255), md_fit(&F_body, 22, tail, (int)(R - L), cut, sizeof cut));
+    if (NE.open) {   /* the name editor, over the list */
+        rrect(L - 40, top - 20, R + 30, H - 118, 8, 0, 0x06101C, PA(255));
+        rect((int)(L - 40), (int)(top - 20), 6, (int)(H - 118 - top + 20), C_ACCENT, PA(255));
+        spaced(&F_body, 19, L, top + 4, C_ACCENT, PA(255), T("PLAYER NAME", "NOME DE JOGADOR"), 3);
+        const float ny = top + 40;
+        rrect(L, ny, R, ny + 92, 6, 2, 0xFFFFFF, PA(60));
+        const int nw = text_w(&F_body, 60, NE.buf);
+        textt(&F_body, 60, L + 24, ny + 10, C_WHITE, PA(255), NE.buf);
+        rect((int)(L + 28 + nw), (int)(ny + 18), 4, 58, C_ACCENT, PA(255));   /* (the caret) */
+        snprintf(buf, sizeof buf, "%d / %d", (int)strlen(NE.buf), MD_NAME);
+        textt(&F_body, 22, R - 20 - text_w(&F_body, 22, buf), ny + 34, C_GREY, PA(255), buf);
+        const float gx = L, gy = ny + 120, cw = (R - L) / NE_COLS, chh = 58;
+        for (int c = 0; c < NE_NCH; c++) {
+            const float x = gx + (c % NE_COLS) * cw, y = gy + (c / NE_COLS) * chh;
+            const int sel = c == NE.cur;
+            const char s1[2] = { kNeChars[c], 0 };
+            rrect(x + 3, y + 3, x + cw - 3, y + chh - 3, 5, sel ? 0 : 1.5f, sel ? C_ACCENT : 0x8A8680, PA(sel ? 255 : 120));
+            textt(&F_body, 30, x + (cw - text_w(&F_body, 30, s1)) / 2, y + 12, sel ? 0x061018 : C_WHITE, PA(255), s1);
+        }
+        const float ay = gy + (NE_NCH / NE_COLS) * chh + 10;
+        static const int span[3][2] = { { 0, 5 }, { 5, 11 }, { 11, 16 } };
+        for (int a = 0; a < 3; a++) {
+            const float x0 = gx + span[a][0] * cw, x1 = gx + span[a][1] * cw;
+            const int sel = NE.cur == NE_DEL + a;
+            const char* lb = a == 0 ? T("DEL", "APAGAR") : a == 1 ? T("RANDOM", "ALEATÓRIO") : "OK";
+            rrect(x0 + 3, ay + 3, x1 - 3, ay + chh - 3, 5, sel ? 0 : 1.5f, sel ? C_ACCENT : 0x8A8680, PA(sel ? 255 : 120));
+            textt(&F_item, 30, (x0 + x1 - text_w(&F_item, 30, lb)) / 2, ay + 12, sel ? 0x061018 : C_WHITE, PA(255), lb);
+        }
+        const float hy = ay + chh + 16;
+        if (M.time - NE.msg_t < 3.0f) textt(&F_body, 22, L, hy, 0xE0A040, PA(255), NE.msg);
+        else textt(&F_body, 22, L, hy, C_GREY, PA(255), T("3 to 16 characters: letters, digits, _ and -, starting with a letter. Used for inFAMOUS 2 and Festival of Blood.",
+                                                           "3 a 16 caracteres: letras, números, _ e -, começando com uma letra. Vale para inFAMOUS 2 e Festival of Blood."));
+    }
+}
+
 /* ---- MENU EFFECTS (launcher.ini menu_effects, SETTINGS > MENU EFFECTS): the menu made to move, drawn into the frame
  * like everything else (no new pictures, all from M.time and a hash): lightning that strikes the background's sky,
  * sparks and embers rising, arcs crawling on the chosen game's name, a burst along the tabs on a page change and a big
@@ -2479,6 +3979,7 @@ static void draw_frame(float fade)
     case P_CONTENT: draw_content(); break;
     case P_SAVES: draw_saves(); break;
     case P_TROPHIES: draw_trophies(); break;
+    case P_MODS: draw_mods(); break;
     case P_SETTINGS: draw_settings(); break;
     default: draw_credits(); break;
     }
@@ -2506,7 +4007,7 @@ static void animate(float dt)
     M.time += dt;
     float k = dt * 5.0f; if (k > 1) k = 1;
     /* (SETTINGS: the picture of the game whose settings they are) */
-    const int shown = M.page == P_SETTINGS ? M.set_game : S.game;
+    const int shown = M.page == P_SETTINGS ? M.set_game : M.page == P_MODS ? MD.game : S.game;   /* (MODS: the game whose mods they are) */
     M.shown_game += (shown - M.shown_game) * k;
     if (fabsf(shown - M.shown_game) < 0.004f) M.shown_game = (float)shown;
     k = dt * 6.0f; if (k > 1) k = 1;
@@ -2525,6 +4026,7 @@ static void set_page(int p)
     M.page = p; M.page_in = 0; M.confirm_t = -100;
     FX.page_t = M.time;
     if (p == P_SETTINGS) { M.set_game = S.game; M.in_list = 0; }   /* (the game HOME has chosen, first) */
+    if (p == P_MODS) { NE.open = 0; MD.game = S.game; MD.sel = 0; MD.scroll = 0; MD.msg_t = -100; for (int g = 0; g < NGAMES; g++) s_md[g].loaded = 0; }   /* (read again: mods copied in meanwhile) */
 }
 
 int main(int argc, char** argv)
@@ -2616,6 +4118,8 @@ int main(int argc, char** argv)
         if (s_cleanup_g >= 0) {   /* the delete/keep prompt has the pad */
             if (p & B_CROSS) { if (confirming()) { cleanup_do(); M.confirm_t = -100; } else M.confirm_t = M.time; }
             else if (p & B_CIRCLE) { logf_("cleanup: kept the install files\n"); s_cleanup_g = -1; M.confirm_t = -100; }
+        } else if (M.page == P_MODS && md_ne_open()) {
+            md_ne_input(p);   /* (the MODS page's name editor has the pad) */
         } else {
         if (p & B_L1) set_page((M.page + NPAGES - 1) % NPAGES);
         if (p & B_R1) set_page((M.page + 1) % NPAGES);
@@ -2690,6 +4194,8 @@ int main(int argc, char** argv)
                 else { M.confirm_t = M.time; M.confirm_game = cg; }
             }
             if ((p & B_SQUARE) && s_inst.state != 1) inst_scan(APP);
+        } else if (M.page == P_MODS) {
+            md_input(p);
         } else if (M.page == P_SETTINGS && !M.in_list) {
             /* the game list: whose settings */
             if (p & B_UP) { M.set_game = (M.set_game + NGAMES - 1) % NGAMES; M.confirm_t = -100; }

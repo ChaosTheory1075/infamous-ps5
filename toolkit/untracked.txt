@@ -5,7 +5,11 @@ include/ps3emu/ps3_pad_icons.h
 include/ps3emu/ps3_spin_cap.h
 include/ps3emu/ps3_toggles.h
 libs/input/pad_input_map.h
+libs/input/pad_triggers.inc
 libs/misc/ps3_toggles.c
+libs/network/ugc_dns.c
+libs/network/ugc_tls.c
+libs/network/ugc_tls.h
 libs/video/fgflow/median.comp
 libs/video/fgflow/median_spv.h
 libs/video/fgflow/search.comp
@@ -65,6 +69,9 @@ libs/video/rsx_ba_replayop.h
 libs/video/rsx_be_async.c
 libs/video/rsx_button_icons.c
 libs/video/rsx_button_icons.h
+libs/video/rsx_lightning.inc
+libs/video/rsx_lightning_rules.inc
+libs/video/rsx_lightning_table.h
 libs/video/rsx_vs_delta.h
 libs/video/smaa/LICENSE.txt
 libs/video/smaa/SMAA.hlsl
@@ -90,6 +97,7 @@ libs/video/vk_overlay_font.h
 libs/video/vk_quickmenu.inc
 runtime/platform/host_qos.h
 runtime/ppu/ppu_fs_lang.h
+runtime/ppu/ppu_fs_mods.h
 runtime/spu/spu_helpers_x86v.h
 runtime/spu/spu_jobreplay.c
 runtime/spu/spu_slot_verify.h

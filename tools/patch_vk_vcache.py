@@ -157,7 +157,7 @@ edit("libs/video/rsx_vulkan_backend.c",
     static unsigned long long last_ns;''',
      '''static unsigned long long s_dump_last_ns;
 /* Whether this present reads the frame back: always headless (the readback is the output) or with a
- * per-frame dump; in a window only when a timed dump or the debug server's shot is due, and every
+ * per-frame dump; in a window only when a timed dump or a debugger's shot is due, and every
  * 64th frame so last_center stays roughly current. Every other window present skips a full copy of
  * the frame and a wait for the GPU. */
 static int vk_readback_due(void)

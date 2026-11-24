@@ -26,11 +26,24 @@ Productions. **No game files are included:** you need your own copies of the gam
 - Trophies: unlocked in the games, listed on the launcher's TROPHIES page
 - An animated menu: lightning, sparks and arcs in each game's colours (bats for Festival of Blood); turn it off
   with SETTINGS > MENU EFFECTS
-- A launcher with HOME, CONTENT, SAVES (back up your saves), TROPHIES, SETTINGS and CREDITS pages
+- A launcher with HOME, CONTENT, SAVES (back up your saves), TROPHIES, MODS, SETTINGS and CREDITS pages
+- **Mods:** texture and skin mods you add yourself, turned on and off on the MODS page (none are included). Mods
+  that change different textures of the same game file are combined when the game starts
+- **Lightning colour:** any colour for Cole's powers, picked while you play: L3+R3 opens the quick menu,
+  LIGHTNING is a colour wheel that changes the colour on the spot. The MODS page has presets of it
+- **Cheats:** the quick menu's (L3+R3) CHEATS page switches them while you play (Cole never dies, attacks cost no
+  electricity, jump height, karma, enemy speed, ...); all off by default, remembered per game
+- **Community missions** (inFAMOUS 2 and Festival of Blood): user-made missions from the fan-run community
+  server. **Off by default**, see [Community missions](#community-missions)
+- **DualSense adaptive triggers:** L2 and R2 push back, and buzz with the game's own rumble while you hold them;
+  off with the quick menu's DualSense Features
+- inFAMOUS audio fixes: RPCS3's "Unstable audio" game patch is on (no more slowdown and gaps), with one jump-table
+  bound kept so the audio no longer freezes or loops, and the game's audio threads run at a higher priority on the
+  PS5 (fewer gaps in big fights)
 
 ## What you need
 - A jailbroken PS5 that runs homebrew apps, with a payload loader on port 9021 (etaHEN or elfldr)
-- Your **own** dumps of exactly these editions (other regions and editions are not accepted by the installer):
+- Your **own** dumps of these editions (the ones tested; other disc editions: see below the table):
 
 | Game | Edition | Files |
 |---|---|---|
@@ -45,6 +58,12 @@ Productions. **No game files are included:** you need your own copies of the gam
   and press INSTALL: the installer reads and decrypts the disc itself (Redump's published disc keys). It reads at
   the drive's speed, about 26 MB/s (inFAMOUS 2: ~12 minutes). This needs the payload loader on port 9021.
 - An encrypted ISO (as dumped, Redump) works too, for the editions above; no PS3Dec step. No PS3 firmware file is needed.
+- **Other disc editions (not confirmed):** the installer also knows these pressings and has their disc keys, but
+  nobody has played them on this port yet: inFAMOUS 2 Europe/Australia BCES01143, UK BCES01144, Turkey
+  BCES01229, Asia BCAS20181, Japan BCJS30075 (the game's program comes from the USA 1.04 update, so these should
+  work), and inFAMOUS Europe/Australia BCES00609, Poland BCES00591, Asia BCAS20074, Japan BCJS30037 (their
+  program has to match the Europe one; if it does not, the installer says so within seconds). If you try one,
+  tell us in Issues.
 - Free space: about 7.5 GB (inFAMOUS), 18 GB (inFAMOUS 2), 4.4 GB (Festival of Blood), plus the dumps until
   you delete them.
 
@@ -57,6 +76,23 @@ Productions. **No game files are included:** you need your own copies of the gam
 
 Leave a game from the PS menu. `README.txt` in the download has the launcher's controls and folders.
 
+## Mods
+1. Put each mod's folder (the one with its `mod.json` and pack files) in `PPSA95463/<if1|if2|fob>/mods/`
+   (`if1` = inFAMOUS, `if2` = inFAMOUS 2, `fob` = Festival of Blood).
+2. In the launcher, open MODS: LEFT/RIGHT picks the game, X turns a mod on or off. A mod that clashes with one
+   that is on is greyed out, with the reason. inFAMOUS: only mods made for your installed edition (USA or Europe)
+   are listed.
+3. Start the game. A mod that cannot be used (a missing or changed file) is left out; the game's log says why.
+
+The lightning colour is not a mod: change it while playing (L3+R3 > LIGHTNING), or pick a preset on the MODS page.
+
+## Community missions
+inFAMOUS 2 and Festival of Blood can download user-made missions again, from a fan-run server (not Sony). It is
+**off by default**: the game stays offline. To turn it on: MODS page, pick inFAMOUS 2 or Festival of Blood,
+ONLINE > COMMUNITY MISSIONS SERVER, X shows a notice, X again turns it on. PLAYER NAME is the name the server gets
+(one is made for you if you do not choose one). The connection is not checked like a normal secure website (the
+server uses its own certificate), so do not use a name you use anywhere else.
+
 ## Known issues
 - Festival of Blood: the light near green road flares flickers (a bug in the port; the PS3 shows it steady).
 - A minor shadow glitch remains.
@@ -66,6 +102,8 @@ Leave a game from the PS menu. `README.txt` in the download has the launcher's c
 - FRAME GENERATION: ghosting and uneven pacing when a game drops into the low 20s.
 - Some Festival of Blood cutscenes play faster than on the PS3.
 - DLC COSTUMES is on by default; turn it off in SETTINGS if you do not own them.
+- Lightning colour: a few glows keep the game's own colour (the light Cole's powers cast on the scene, the core of
+  Festival of Blood's fireball and of inFAMOUS 2's hand glow).
 
 Report bugs in this repository's [Issues](https://github.com/ChaosTheory1075/infamous-ps5/issues): turn DIAGNOSTICS on for that game (SETTINGS), reproduce it once, and attach the game's log from
 `PPSA95463/<if1|if2|fob>/logs/` (launcher and install problems: `PPSA95463/logs/launcher.log`).
@@ -82,7 +120,8 @@ frame generation, SPU/PPU runtime changes) and erikomis' infamous2-recomp port t
 | `tools/ps5/launcher/` | The launcher (`launcher.c`, texts in `launcher_text.inc`) and the installer (`installer.c`: the disc in the PS5's drive, ISO (decrypted or encrypted), disc folder, PSN package, update download) |
 | `tools/ps5/` | PS5 glue: `ps5_app.c` (per-game defaults, settings, trophies), `ps5_shims.c`, the linker scripts, `ps5link.sh`, `build_if2.sh` (all three games), `ps5.cmake`, `ps5cc` |
 | `tools/` | The edits to the port sources and the recompiled code (each an exact-text insertion that stops if its anchor is not found once), build and measurement scripts |
-| `toolkit/` | Our changes to ps3recomp: `BASE_COMMIT.txt`, `ps3recomp-fork.patch`, `added/` |
+| `tools/gpatch/` | Gameplay patches and cheats: the tables and run-time code each port includes (`gpatch_*.inc`, `qm_cheats_*.inc`, inFAMOUS 2's cheat table), their generators, `gpatch_apply_<game>.py` (the patches' edits of the recompiled code) and the port edits as patches |
+| `toolkit/` | Our changes to ps3recomp: `BASE_COMMIT.txt`, `ps3recomp-fork.patch`, `added/` (also the mods overlay `runtime/ppu/ppu_fs_mods.h`, the lightning colours `libs/video/rsx_lightning*`, the adaptive triggers `libs/input/pad_triggers.inc`, the community missions client `libs/network/ugc_*`) |
 | `work/` | Test-box measurement scripts (console environment, A/B runs, soak and boot tests) |
 | `DONTFLIP.md` | Changes that broke something before: read before changing a default |
 
@@ -105,6 +144,9 @@ The build runs on Linux (Ubuntu 24.04), as root, with clang 18 and your own game
    `tools/fob_build.sh` (Festival of Blood); `tools/if1_build.sh`, `tools/if2_build.sh` and `tools/fob_build.sh`
    run these steps and the lift from your own decrypted EBOOT.
 3. After the lift: `tools/postlift.sh <if1|if2|fob>` (prints the commands; `GO=1` runs them).
+   Gameplay patches and cheats: copy the game's `.inc` files from `tools/gpatch/` into the port folder, apply
+   `game_patches_<game>.patch` there (inFAMOUS 2 also `main_gp_frame_if2.patch` to the `main.cpp` that
+   `build_if2.sh` copies), then `python3 tools/gpatch/gpatch_apply_<game>.py apply <port>/recompiled`.
 4. The PS5 programs: `tools/ps5/build_if2.sh` (`GAME=if1|if2|fob`) and `tools/ps5/launcher/build_launcher.sh`,
    with the PS5 Payload SDK, Mesa RADV for the PS5 and the ps5-plume-triangle tooling (see
    [LICENSES/THIRD_PARTY.md](LICENSES/THIRD_PARTY.md) for each one's source).
@@ -124,7 +166,12 @@ The build runs on Linux (Ubuntu 24.04), as root, with clang 18 and your own game
 - **elripalda**: [GTA IV for PS5](https://github.com/elripalda/gta4-ps5), whose PS5 helpers (`ps5_stat.c`,
   `ps5_emutls.c`, `ps5_relro_pad.c`) the games and the launcher link
 - The **RPCS3** team and the PS3 Developer Wiki: how the PS3 behaves, and the SELF / NPDRM / RAP decryption the
-  installer follows; **Hasster**: the RPCS3 game patches used in inFAMOUS
+  installer follows; **Hasster**: the RPCS3 game patches used in inFAMOUS; **Redump**: the published PS3 disc
+  keys the installer uses
+- The inFAMOUS modding community: the gameplay patches and cheats are ported from their RPCS3 patches and Cheat
+  Engine tables (**bungholio**, **STALKER**, **Hasster**, **FlexBy**, **L_**, **Yahfz**, **artofaria**,
+  **illusion**, **Codex**, **Scirvir**, **Pappapatu**, **chidreams**, **Hiei-YYH**; each is credited in
+  `tools/gpatch/`); the community missions server is run by fans of the games, not by this project
 - Built with Mesa RADV, glslang, SPIRV-Tools, SDL2, GNU libiconv, the ATRAC3 decoder from FFmpeg (via PPSSPP),
   AMD FidelityFX FSR 1, SMAA, stb, dr_mp3, zlib, LLVM libc++, and the Oswald, Inter, Noto Sans CJK and DejaVu
   fonts

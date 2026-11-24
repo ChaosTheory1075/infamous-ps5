@@ -1,0 +1,18 @@
+--- a/main.cpp
++++ b/main.cpp
+@@ -212,9 +212,15 @@
+ extern "C" void rsx_metal_backend_note_guest_frame(void);
+ #endif
+ 
++/* game_patches.cpp cheat_runtime.inc (tools/gpatch): PS3_CHEATS held values + gpatch_tick, once per guest frame;
++ * g_gp_frame_need stays 0 (one byte load per present) unless a held cheat or a watched gpatch word is on. */
++extern "C" unsigned char g_gp_frame_need;
++extern "C" void gp_frame(void);
++
+ static void present_guest_frame(void)
+ {
+     const uint64_t ft_t0 = PS3_FT_ON() ? ps3_ft_now() : 0;
++    if (g_gp_frame_need) gp_frame();
+     rsx_backend_present();
+     if (ft_t0) ps3_ft_span(PS3_FT_PRESENT, 0, 0, 0, ft_t0, ps3_ft_now());
+ #if defined(__APPLE__)

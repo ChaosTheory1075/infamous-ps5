@@ -23,7 +23,7 @@ SECTIONS {
     .text 0 : ALIGN(CONSTANT(MAXPAGESIZE)) {
         QUAD(0xcccccccccccccccc)
         QUAD(0xcccccccccccccccc)
-        /* ps5 text hot (agent_ppucost 2026-11-11): the PGO section prefixes grouped as GNU ld's default script
+        /* ps5 text hot (ppucost notes 2026-11-11): the PGO section prefixes grouped as GNU ld's default script
          * does on the BC (cold first, then hot, then the rest). With the plain *(.text .text.*) the 572 PGO-hot
          * lifted if1 functions (3.5 MB) were spread over 65 MB of text; the BC packs them into 3.5 MB. */
         *(.text.unlikely .text.*_unlikely .text.unlikely.*)

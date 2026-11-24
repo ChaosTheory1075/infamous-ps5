@@ -167,6 +167,19 @@ static const inst_known_t kInstKnown[] = {
     { "BCUS98125", INST_IF2, 1, "01.03", 1, "inFAMOUS 2 update 1.03" },
     { "BCUS98125", INST_IF2, 1, "01.04", 1, "inFAMOUS 2 update 1.04" },
     { "NPUA80657", INST_FOB, 0, NULL, 1, "inFAMOUS: Festival of Blood (USA, PSN)" },
+    /* editions (2026-11-17): the other discs, untested (their disc keys are in kInstDiscKeys).
+     * inFAMOUS 2: the game program comes from the USA 1.04 update (the launcher downloads it), the disc gives the
+     * data, so these can work. inFAMOUS: the program comes from the disc and must be the Europe one (or the USA one,
+     * converted); another edition's is checked first and refused in seconds if it differs. */
+    { "BCES01143", INST_IF2, 0, NULL, 0, "inFAMOUS 2 (Europe, Australia, disc)" },
+    { "BCES01144", INST_IF2, 0, NULL, 0, "inFAMOUS 2 (UK, disc)" },
+    { "BCES01229", INST_IF2, 0, NULL, 0, "inFAMOUS 2 (Turkey, disc)" },
+    { "BCAS20181", INST_IF2, 0, NULL, 0, "inFAMOUS 2 (Asia, disc)" },
+    { "BCJS30075", INST_IF2, 0, NULL, 0, "inFAMOUS 2 (Japan, disc)" },
+    { "BCES00609", INST_IF1, 0, NULL, 0, "inFAMOUS (Europe, Australia, disc)" },
+    { "BCES00591", INST_IF1, 0, NULL, 0, "inFAMOUS (Poland, disc)" },
+    { "BCAS20074", INST_IF1, 0, NULL, 0, "inFAMOUS (Asia, disc)" },
+    { "BCJS30037", INST_IF1, 0, NULL, 0, "inFAMOUS (Japan, disc)" },
 };
 enum { INST_NKNOWN = sizeof kInstKnown / sizeof kInstKnown[0] };
 /* What each game needs: its base, and inFAMOUS 2 all four updates (they are not cumulative). */
@@ -1034,7 +1047,7 @@ static uint16_t be16(const uint8_t* p) { return (uint16_t)(p[0] << 8 | p[1]); }
 /* The USA disc (BCUS98119 v01.00 and v02.00: the same ELF) -> the Europe EBOOT.elf above: a UDP1 patch, applied in memory. */
 static const uint8_t kIf1UsaElfSha[32] = { 0x4f,0x2d,0xb3,0xfb,0x7c,0x76,0xfb,0xb4,0xf8,0x0c,0xbc,0x84,0x45,0xcf,0x0e,0xa1,0x57,0x0a,0x66,0x49,0x96,0xa7,0x78,0x7e,0x69,0x0e,0xfc,0xc1,0xa3,0x9b,0xef,0xb4 };
 #include "if1_usa_eboot.inc"
-/* UDP1 (big-endian; work/agent_delta1/udelta_dec.c): "UDP1", 'F' u16 n name u16 n src u64 size u32 crc32 sha256[32],
+/* UDP1 (big-endian; tools/ps5/launcher/if1_usa/udelta_dec.c): "UDP1", 'F' u16 n name u16 n src u64 size u32 crc32 sha256[32],
  * records 'C' u64 src_off u32 len | 'D' u32 len bytes, 'E', 'Z'. One file. *out = the result (malloc'd), checked against
  * its size, CRC32 and sha256; returns NULL, or why not. */
 static const char* inst_udp1(const uint8_t* src, size_t srcn, const uint8_t* p, size_t pn, uint8_t** out, size_t* outn)
@@ -1221,6 +1234,7 @@ static int inst_eboot(const char* part)
     if (memcmp(sha, kInstEbootSha[J->game], 32)) {
         free(elf);
         return inst_fail(J->game == INST_FOB ? "The EBOOT.BIN of %s isn't the expected one (another edition, or the .rap of another game)"
+                         : J->game == INST_IF1 ? "The game program on %s isn't the one this build is made from (inFAMOUS: the Europe BCES00220 or USA BCUS98119 disc is needed)"
                                              : "The EBOOT.BIN of %s isn't the expected one (another edition or version)", s->name);
     }
     char p[700]; snprintf(p, sizeof p, "%s/USRDIR/EBOOT.elf", part);
@@ -1278,7 +1292,7 @@ static void* inst_main(void* arg)
         if (inst_copy_ent(pk[j].s, e, p)) { free(pk); return NULL; }
     }
     free(pk);
-    if (inst_if1_usa(J)) {   /* the title ID the build, its BCES00220 first-boot folder and the saves use; the rest stays the disc's */
+    if (g == INST_IF1 && strcmp(J->src[0]->tid, "BCES00220")) {   /* (USA, or another edition whose program matched) the title ID the build, its BCES00220 first-boot folder and the saves use; the rest stays the disc's */
         snprintf(p, sizeof p, "%s/PARAM.SFO", part);
         FILE* f = fopen(p, "rb");
         uint8_t sfo[4096]; size_t n = f ? fread(sfo, 1, sizeof sfo, f) : 0;

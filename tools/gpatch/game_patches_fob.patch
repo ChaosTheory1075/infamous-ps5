@@ -1,0 +1,29 @@
+--- a/game_patches.cpp
++++ b/game_patches.cpp
+@@ -25,6 +25,8 @@
+ #include <vector>
+ 
+ extern uint8_t* vm_base;
++extern "C" void gpatch_init(const char* elf_path);   /* gpatch_runtime.inc (tools/gpatch): PS3_GPATCH toggles */
++extern "C" void qm_cheats_init(const char* elf_path);   /* qm_cheats_runtime.inc: the quick menu's CHEATS page (2026-11-14) */
+ 
+ namespace {
+ 
+@@ -89,6 +91,8 @@
+ 
+ extern "C" void infamous2_apply_patches(const char* elf_path)
+ {
++    gpatch_init(elf_path);   /* PS3_GPATCH: community patches as toggles (data words now, hook flags for the lifted code) */
++    qm_cheats_init(elf_path);   /* the quick menu's CHEATS page: what was on last time is switched on again */
+     const char* want_env = getenv("PS3_PATCHES");
+     if (!want_env || !*want_env) return;
+     std::vector<std::string> want;
+@@ -210,3 +214,8 @@
+     fprintf(stderr, "[patch] PS3_ASPECT=%s: cameras at %u:%u (aspect %.4f, hor+)\n", e, width, height,
+             (double)width / (double)height);
+ }
++
++/* PS3_GPATCH (tools/gpatch): this game's toggle tables + the runtime; needs ppu_hash() above */
++#include "gpatch_fob.inc"
++/* the quick menu's CHEATS page (2026-11-14): after the gpatch / cheat tables it switches */
++#include "qm_cheats_fob.inc"

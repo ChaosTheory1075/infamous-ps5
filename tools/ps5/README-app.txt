@@ -41,8 +41,6 @@ env.txt (optional, one per line, e.g.  PS3_LANG=fr)
                                       play at least 3 minutes, in the open world)
   PS3RECOMP_VK_DUMP=                  no screenshots (default: a half-size one every 10 s to
                                       logs/shot.NNN.ppm, PS3RECOMP_VK_DUMP_EVERY=<seconds>)
-  PS5_DEBUG_PORT=0                    no debug server (default: port 9990, read-only: thread and
-                                      SPU state, memory reads, screenshots, for a TCP client)
   PS5_LOG_LINEBUF=1                 write the log line by line (default: buffered, flushed every
                                       second; the last second is lost if the app crashes)
   PS3_USLEEP_KICK_US=0                the game's short polling sleeps use the system timer again

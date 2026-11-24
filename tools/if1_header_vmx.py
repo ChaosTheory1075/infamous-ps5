@@ -9,10 +9,10 @@ with open(h, newline="") as f:
     s = f.read()
 if "PPU_VSPLTW" in s:
     print("if1 header vmx: already applied"); sys.exit(0)
-BLOCK = r'''/* ppu vmx vec / shuf (2026-11-11, work/agent_if1hot; inFAMOUS 1 only -- this header is if1's own).
+BLOCK = r'''/* ppu vmx vec / shuf (2026-11-11, if1hot notes; inFAMOUS 1 only -- this header is if1's own).
  * PPU_VMX_VEC: runtime/ppu/ppu_vmx.h uses SSE forms of vrefp/vrsqrtefp/vmaxfp/vminfp/vcmp{gt,ge,eq}fp/vcmpequw
  *   (bit-identical to the scalar loops; changes callers' CFG -> collect a new IR profile with it on).
- * PPU_VMX_SHUF: PPU_VSPLTW / PPU_VSLDOI (written into the lifted sources by work/agent_if1hot/patches/
+ * PPU_VMX_SHUF: PPU_VSPLTW / PPU_VSLDOI (written into the lifted sources by if1hot notes/
  *   rewrite_vshuf.py) are one 16-byte load + pshufd/palignr + one 16-byte store instead of four 4-byte stores
  *   (vspltw into its own source register) or a 32-byte stack round trip (vsldoi): both made the next 16-byte read
  *   of the register a failed store-to-load forward on Zen 2. Straight-line both ways: PGO-neutral.

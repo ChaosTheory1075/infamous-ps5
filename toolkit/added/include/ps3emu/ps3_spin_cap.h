@@ -1,7 +1,7 @@
 /*
  * ps3_spin_cap.h -- wake storm (2026-11-11): one cap for every thread that spins before it sleeps.
  *
- * The console profile (work/agent_ps5prof/report.md 3.1) has 40-66 thousand condition-variable sleep/wake pairs a
+ * The console profile (ps5prof notes 3.1) has 40-66 thousand condition-variable sleep/wake pairs a
  * second, ~8-9 us of CPU each (5-6 on the sleeper, 2.5-3 on whoever wakes it), most of them shorter than the
  * hand-off itself. A short spin on the real predicate answers most of those without the kernel -- but every game
  * thread on the PS5 is SCHED_FIFO at one priority, so a spinner never yields: 13 of them (one per hardware thread)

@@ -27,7 +27,7 @@ assert "if1_jl_backoff" in s7, "apply tools/if1_jl_wait.py first"
 assert "if1_prio8_to = 0;" in ssre, "apply tools/if1_spurs_prio8.py first"
 
 HELPER = r'''
-/* ==== if1 jl prof / lane spin / ready 6 (work/agent_if1jobs/tools/if1_jl_prof.py, 2026-11-11) ==== */
+/* ==== if1 jl prof / lane spin / ready 6 (if1jobs notes, 2026-11-11) ==== */
 #include <time.h>
 extern "C" int ps3_memkick_wait_pred(uint64_t us, uint64_t spin_us, int (*done)(void*), void* arg);
 extern "C" unsigned long g_mkp_stat[8];
@@ -44,7 +44,7 @@ static int if1j_spin(void)
 static int if1j_ready(void)
 { static int v = -1; if (v < 0) { v = if1j_env("PS3_IF1_JL_READY", 6, 6); if (v) fprintf(stderr, "[if1 jl] ready count 5 -> %d where max contention allows\n", v); } return v; }
 
-/* if1 jl stat (if1spu, work/agent_if1stack): one "[if1 jl stat]" line per 300 presents while PS3_IF1_JL_STAT=1,
+/* if1 jl stat (if1spu, if1stack notes): one "[if1 jl stat]" line per 300 presents while PS3_IF1_JL_STAT=1,
  * PS3_IF1_JL_SPIN_US or PS3_IF1_JL_READY is set: lists waited for, guest polls per list, wait calls ("spin returns")
  * per frame and how the lane-spin waits ended, kicks raised to 6, and per SPU lane 0..5 the number of distinct job
  * indices main saw in that lane while it polled (a lower bound of the jobs each SPU number ran for the waited
@@ -258,7 +258,7 @@ extern "C" void if1_jl_kick_hook(ppu_context* ctx)
     }
 }
 '''
-SRE = r'''    /* spurs maxcont wkl mask (work/agent_spu6): the workload id is not known yet at attribute init, so with
+SRE = r'''    /* spurs maxcont wkl mask (spu6 notes): the workload id is not known yet at attribute init, so with
      * SPURS_MAXCONT_WKL set this hook stands down and the runtime's fixup thread (lv2_register.c) widens only the
      * masked workloads (within 50 ms of their creation). */
     { const char* m = getenv("SPURS_MAXCONT_WKL"); if (m && *m) if1_prio8_to = 0; }

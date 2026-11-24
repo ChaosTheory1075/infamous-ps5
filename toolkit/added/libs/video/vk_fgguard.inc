@@ -10,7 +10,7 @@
  *    (default 0.25; 0 = no difference guard) the generated frame becomes the next real frame, until the
  *    difference has been below 75% of it for 4 pairs. Decided in the frame's own command buffer (no readback, no
  *    frame of delay: a cut never shows one doubled frame first); both methods (flow + mvwarp, neural).
- *    Calibration (work/agent_fg/calib.py on the PS3 footage, 30 fps pairs): play 0.10-0.15, p90 0.20-0.22,
+ *    Calibration (fg notes on the PS3 footage, 30 fps pairs): play 0.10-0.15, p90 0.20-0.22,
  *    fast swings and cuts 0.30-0.60; pairs two frames apart (15 fps): p50 0.17-0.20, p90 0.31-0.35.
  *  PS3_FG_GUARD=0: both off (the behaviour before the guards). "fg guard:" log line every 600 presents.
  * Before 2026-11-11 the guard was an absolute mean luma difference (0.10: never reached in a night scene) and ran

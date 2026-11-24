@@ -24,3 +24,12 @@ __pycache__/
 build*/
 tools/local.env
 tools/ps5/launcher/if1_usa_eboot.inc
+mods/
+mod.json
+*.rng
+*.dlt
+*.merged
+*.dds
+*.xpp
+*.xpps
+*.spv

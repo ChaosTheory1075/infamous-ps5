@@ -1,0 +1,29 @@
+--- a/game_patches.cpp
++++ b/game_patches.cpp
+@@ -25,6 +25,8 @@
+ #include <vector>
+ 
+ extern uint8_t* vm_base;
++extern "C" void gpatch_init(const char* elf_path);   /* gpatch_runtime.inc (tools/gpatch): PS3_GPATCH toggles */
++extern "C" void qm_cheats_init(const char* elf_path);   /* qm_cheats_runtime.inc: the quick menu's CHEATS page (2026-11-14) */
+ 
+ namespace {
+ 
+@@ -113,6 +115,8 @@
+ 
+ extern "C" void infamous2_apply_patches(const char* elf_path)
+ {
++    gpatch_init(elf_path);   /* PS3_GPATCH: community patches as toggles (data words now, hook flags for the lifted code) */
++    qm_cheats_init(elf_path);   /* the quick menu's CHEATS page: what was on last time is switched on again */
+     if1_rpcs3_data();   /* if1 rpcs3 data */
+     const char* want_env = getenv("PS3_PATCHES");
+     if (!want_env || !*want_env) return;
+@@ -245,3 +249,8 @@
+     g_if1_unst_audio = !(e && *e == '0');
+     fprintf(stderr, "[patch] if1 unstable audio (RPCS3 canary, Hasster): %s\n", g_if1_unst_audio ? "on" : "off");
+ }
++
++/* PS3_GPATCH (tools/gpatch): this game's toggle tables + the runtime; needs ppu_hash() above */
++#include "gpatch_if1.inc"
++/* the quick menu's CHEATS page (2026-11-14): after the gpatch / cheat tables it switches */
++#include "qm_cheats_if1.inc"

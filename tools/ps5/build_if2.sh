@@ -31,7 +31,7 @@ cmake -S $PORT -B $B -G Ninja \
     > $P/cfg.log 2>&1 || { tail -40 $P/cfg.log; exit 1; }
 fi
 grep -E "SDL2|Vulkan|Shaders|glslang|backend" $P/cfg.log | head -10
-cmake --build $B -j $(nproc) -- -k 0 > $B.log 2>&1 || true
+cmake --build $B -j ${JOBS:-$(nproc)} -- -k 0 > $B.log 2>&1 || true
 echo "failed objects: $(grep -c '^FAILED' $B.log)"
 grep -h 'error:' $B.log | sed -E 's/^[^ ]+ //' | sort | uniq -c | sort -rn | head -25
 grep '^FAILED' $B.log | head -15

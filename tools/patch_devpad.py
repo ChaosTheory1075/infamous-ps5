@@ -1,7 +1,7 @@
 # devpad: controller input for development tools, in memory (no file polling), port 0 only.
 #  - inject: ps3_devpad_press(mask, polls, lx, ly, rx, ry): hold buttons (PAD_SCRIPT mask encoding,
 #    DIGITAL2 << 8 | DIGITAL1) and the sticks (0..255, 128 centred; -1 leaves a stick alone) for
-#    `polls` reads of the pad. The PS5 debug server's `pad` command drives it.
+#    `polls` reads of the pad. The PS5 debugger's `pad` command drives it.
 #  - record: ps3_devpad_record(path) writes every change of the final pad state (the player's and
 #    anything injected) as "t_ms d1 d2 lx ly rx ry"; ps3_devpad_record(NULL) stops.
 #  - replay: ps3_devpad_replay(path) plays such a file back from now (time-based), on top of the

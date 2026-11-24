@@ -34,8 +34,8 @@ __attribute__((weak)) void ps3_snap_request(void) {}
 # declaration near the top
 p = p.replace('#include', 'void ps3_snap_request(void);   /* snap combo */\n#include', 1)
 
-v = edit(v, '''int g_vk_dump_now;   /* the PS5 debug server's "shot": the next present writes one */''',
-'''int g_vk_dump_now;   /* the PS5 debug server's "shot": the next present writes one */
+v = edit(v, '''int g_vk_dump_now;   /* a debugger's "shot": the next present writes one */''',
+'''int g_vk_dump_now;   /* a debugger's "shot": the next present writes one */
 /* snap combo: frames still to save (counts down on every present; every 3rd one is written). */
 static volatile int s_snap_left;
 static unsigned s_snap_n;

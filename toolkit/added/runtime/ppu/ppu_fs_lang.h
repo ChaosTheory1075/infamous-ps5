@@ -365,20 +365,29 @@ static void lang_scan_bik(FILE* f, const char* hpath, std::vector<LangPatch>& ou
                   base, g_lang.voice, idb, game, ida);
 }
 
+/* PS3_MODS_DIR / PS3_MODS (ppu_fs_mods.h, included after this header): the
+ * TOC records of replaced packs get other keys through the same patches. */
+static bool mods_active(void);
+static void mods_scan_psarc(FILE* f, const char* hpath, std::vector<LangPatch>& out);
+
 /* An fd was opened on hpath: note what its reads must change. */
 static void lang_on_open(int fd, const char* hpath)
 {
     if (fd < 0 || fd >= LANG_FD_MAX) return;
     lang_init();
     std::vector<LangPatch> p;
-    if (g_lang.text[0] || g_lang.voice[0]) {
+    const bool mods = mods_active();
+    if (g_lang.text[0] || g_lang.voice[0] || mods) {
         const size_t l = strlen(hpath);
         const bool psarc = (l > 6 && !strcmp(hpath + l - 6, ".psarc")) || (l > 8 && !strcmp(hpath + l - 8, ".psarc_s"));
         const bool bik = l > 4 && lang_ieq_n(hpath + l - 4, ".bik", 4);
-        if ((psarc && g_lang.text[0]) || (bik && g_lang.voice[0])) {
+        if ((psarc && (g_lang.text[0] || mods)) || (bik && g_lang.voice[0])) {
             /* A FILE of its own: the guest's descriptor keeps its position. */
             if (FILE* f = fopen(hpath, "rb")) {
-                if (psarc) lang_scan_psarc(f, hpath, p); else lang_scan_bik(f, hpath, p);
+                if (psarc) {
+                    if (g_lang.text[0]) lang_scan_psarc(f, hpath, p);
+                    if (mods) mods_scan_psarc(f, hpath, p);   /* key bytes 0-15; lang patches 16-29 */
+                } else lang_scan_bik(f, hpath, p);
                 fclose(f);
             }
         }

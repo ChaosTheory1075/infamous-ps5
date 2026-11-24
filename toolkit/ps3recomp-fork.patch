@@ -944,7 +944,7 @@ index 6b4cdbc..09bb466 100644
      s_kb_ports[0].codetype = CELL_KB_CODETYPE_ASCII;
  
 diff --git a/libs/input/cellPad.c b/libs/input/cellPad.c
-index 621d53e..d9f576c 100644
+index 621d53e..b1b7095 100644
 --- a/libs/input/cellPad.c
 +++ b/libs/input/cellPad.c
 @@ -10,6 +10,10 @@
@@ -1175,7 +1175,7 @@ index 621d53e..d9f576c 100644
  
  /* ---------------------------------------------------------------------------
   * XInput backend
-@@ -287,63 +489,334 @@ static u8 pad_sdl_trigger_to_u8(int raw)
+@@ -287,63 +489,364 @@ static u8 pad_sdl_trigger_to_u8(int raw)
      return (u8)val;
  }
  
@@ -1387,6 +1387,35 @@ index 621d53e..d9f576c 100644
 +        const ps5_pad_vibration still = { 0, 0 }; scePadSetVibration(s_ps5_pad, &still);
 +    }
 +}
++/* ds triggers: the adaptive triggers (pad_triggers.inc: an even push on L2, a two-stage R2, and a buzz on a held
++ * trigger while the game rumbles). Called every poll with the triggers as just read; the controller is told only
++ * when the effects change. Three refusals in a row: off for this session (a controller without them). */
++#include "pad_triggers.inc"
++int scePadSetTriggerEffect(int32_t handle, const ps5_trig_param* param);
++static void pad_ps5_triggers(unsigned l2, unsigned r2)
++{
++    static pad_trig_state st;
++    static int sw = -1, fails, said, buzzes;
++    if (sw < 0) { const char* e = getenv("PS3_TRIGGERS"); sw = !(e && *e == '0'); }
++    if (!sw || fails >= 3 || s_ps5_pad < 0) return;
++    const unsigned long long now = pad_now_ms();
++    ps5_trig_param p;
++    if (!pad_trig_step(&st, pad_ds_features(), l2, r2, s_rumble[0].lo, s_rumble[0].hi, now, &p)) return;
++    const int rc = scePadSetTriggerEffect(s_ps5_pad, &p);
++    if (rc != 0) {
++        if (++fails >= 3) printf("[cellPad] adaptive triggers refused (0x%x): off for this session\n", (unsigned)rc);
++        return;
++    }
++    fails = 0;
++    pad_trig_sent(&st, &p, now);
++    if (!said) { said = 1; printf("[cellPad] adaptive triggers on: L2 mode %d, R2 mode %d\n", p.l2.mode, p.r2.mode); }
++    if ((p.l2.mode == 3 || p.r2.mode == 3) && buzzes < 12) {
++        buzzes++;
++        printf("[cellPad] adaptive triggers: buzz L2 %d R2 %d (game rumble %u/%u, L2 %u R2 %u)\n",
++               p.l2.mode == 3 ? p.l2.data[1] : 0, p.r2.mode == 3 ? p.r2.data[1] : 0,
++               (unsigned)(s_rumble[0].lo >> 8), (unsigned)(s_rumble[0].hi >> 8), l2, r2);
++    }
++}
 +static void pad_ps5_open(void)
 +{
 +    int32_t user = -1;
@@ -1413,6 +1442,7 @@ index 621d53e..d9f576c 100644
 +    memset(&d, 0, sizeof d);
 +    if (scePadReadState(s_ps5_pad, &d) != 0) { s_host_state[0].connected = 0; return; }
 +    pad_ps5_light();
++    pad_ps5_triggers(d.l2, d.r2);
 +    PadHostState* hs = &s_host_state[0];
 +    hs->connected = 1;
 +    u16 b = (u16)(d.buttons & 0xFCFEu);
@@ -1550,7 +1580,7 @@ index 621d53e..d9f576c 100644
  
          /* Pressure: SDL has digital buttons, so 0 or 255 */
          s_host_state[i].press_up       = (btns & CELL_PAD_CTRL_UP)       ? 255 : 0;
-@@ -357,10 +830,19 @@ static void pad_poll_sdl2(void)
+@@ -357,10 +860,19 @@ static void pad_poll_sdl2(void)
          s_host_state[i].press_l1       = (btns & CELL_PAD_CTRL_L1)       ? 255 : 0;
          s_host_state[i].press_r1       = (btns & CELL_PAD_CTRL_R1)       ? 255 : 0;
      }
@@ -1570,7 +1600,7 @@ index 621d53e..d9f576c 100644
      if (!s_sdl_inited) {
          if (SDL_WasInit(SDL_INIT_GAMECONTROLLER) == 0) {
              SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER);
-@@ -368,24 +850,21 @@ static void pad_init_backend(void)
+@@ -368,24 +880,21 @@ static void pad_init_backend(void)
          s_sdl_inited = 1;
      }
      memset(s_sdl_controllers, 0, sizeof(s_sdl_controllers));
@@ -1604,7 +1634,7 @@ index 621d53e..d9f576c 100644
  }
  
  #endif /* PAD_BACKEND_SDL2 */
-@@ -490,34 +969,224 @@ static void pad_poll_file(u16* out_btns, int* out_lx, int* out_ly, int* out_rx,
+@@ -490,34 +999,224 @@ static void pad_poll_file(u16* out_btns, int* out_lx, int* out_ly, int* out_rx,
  }
  
  /* Keyboard pad (macOS window): the Metal window records key state by
@@ -1853,7 +1883,7 @@ index 621d53e..d9f576c 100644
      /* PS3_PAD_FILE: its buttons are held in addition to the keys; an
       * off-centre file axis wins over the keyboard's. */
      { u16 fb; int flx, fly, frx, fry;
-@@ -528,10 +1197,79 @@ static void pad_poll_keys(void)
+@@ -528,10 +1227,79 @@ static void pad_poll_keys(void)
        if (frx != 128) rx = frx;
        if (fry != 128) ry = fry; }
      PadHostState* hs = &s_host_state[0];
@@ -1933,7 +1963,7 @@ index 621d53e..d9f576c 100644
  static void pad_poll_backend(void)
  {
      /* Benign race: two threads may poll in the same tick. That costs one extra
-@@ -539,6 +1277,7 @@ static void pad_poll_backend(void)
+@@ -539,6 +1307,7 @@ static void pad_poll_backend(void)
      static unsigned long long s_last_ms = 0;
      unsigned long long now = pad_now_ms();
      if (s_last_ms && now - s_last_ms < PAD_POLL_INTERVAL_MS) return;
@@ -1941,7 +1971,7 @@ index 621d53e..d9f576c 100644
      s_last_ms = now;
      /* A real pad streams reports at roughly this rate whether or not anything
       * changed, and libpad buffers them; a fresh sweep is a fresh report for
-@@ -553,9 +1292,23 @@ static void pad_poll_backend(void)
+@@ -553,9 +1322,23 @@ static void pad_poll_backend(void)
  #ifdef _WIN32
      if (!s_host_state[0].connected) pad_poll_keyboard();
  #endif
@@ -1968,7 +1998,7 @@ index 621d53e..d9f576c 100644
  }
  
  /* ---------------------------------------------------------------------------
-@@ -581,10 +1334,19 @@ s32 cellPadInit(u32 max_connect)
+@@ -581,10 +1364,19 @@ s32 cellPadInit(u32 max_connect)
      memset(s_port_setting, 0, sizeof(s_port_setting));
      memset(s_host_state, 0, sizeof(s_host_state));
  
@@ -1988,7 +2018,7 @@ index 621d53e..d9f576c 100644
  
      return CELL_OK;
  }
-@@ -596,7 +1358,9 @@ s32 cellPadEnd(void)
+@@ -596,7 +1388,9 @@ s32 cellPadEnd(void)
      if (!s_pad_initialized)
          return CELL_PAD_ERROR_NOT_OPENED;
  
@@ -1998,7 +2028,7 @@ index 621d53e..d9f576c 100644
  
      s_pad_initialized = 0;
      s_max_connect = 0;
-@@ -616,6 +1380,47 @@ void cellPad_poll(void)
+@@ -616,6 +1410,47 @@ void cellPad_poll(void)
   * were fixed.) These used to be redeclared here with a 64-bit address
   * parameter, which conflicts with the header now that it is included. */
  
@@ -2046,7 +2076,7 @@ index 621d53e..d9f576c 100644
  s32 cellPadGetData(u32 port_no, CellPadData* data_guest)
  {
      { static int _once = 0;
-@@ -707,8 +1512,9 @@ skip_inject: ;
+@@ -707,8 +1542,9 @@ skip_inject: ;
       * Split correctly — writing the whole value into DIGITAL1 with DIGITAL2=0
       * left every face button (cross/circle/triangle/square, L1/L2/R1/R2) dead.
       * (via sagemono, PR #42) */
@@ -2058,7 +2088,7 @@ index 621d53e..d9f576c 100644
  
      /* PAD_AUTOPRESS: headless bring-up input -- pulse CROSS then START every few
       * seconds of polling so boot screens that wait for input advance without a
-@@ -730,21 +1536,40 @@ skip_inject: ;
+@@ -730,21 +1566,40 @@ skip_inject: ;
       * field before CROSS means anything. Masks are CELL_PAD_CTRL_* packed as
       * (DIGITAL2 << 8) | DIGITAL1: START 0x0008, UP 0x0010, DOWN 0x0040,
       * LEFT 0x0080, RIGHT 0x0020, CROSS 0x4000, CIRCLE 0x2000, TRIANGLE 0x1000.
@@ -2103,7 +2133,7 @@ index 621d53e..d9f576c 100644
                    while (*p == ',' || *p == ' ') p++;
                }
                printf("[cellPad] PAD_SCRIPT: %d event(s)\n", n_ev);
-@@ -752,24 +1577,59 @@ skip_inject: ;
+@@ -752,24 +1607,59 @@ skip_inject: ;
        }
        if (s_sc && port_no == 0) {
            double now = (double)(GetTickCount64() - t0) / 1000.0;
@@ -2169,7 +2199,7 @@ index 621d53e..d9f576c 100644
        } }
  
      /* PAD_FILE=<path> -- closed-loop input. Each poll, if the file holds a
-@@ -817,20 +1677,32 @@ skip_inject: ;
+@@ -817,20 +1707,32 @@ skip_inject: ;
       * started -- which can leave the subject of the demo off-screen or too far
       * away to make out. Legit input simulation, same footing as YDKJ_INJECT_PAD. */
      { static int s_st = -1;
@@ -2212,7 +2242,7 @@ index 621d53e..d9f576c 100644
        /* PAD_SWEEP=<seconds per step>: walk the sticks through a fixed set of
         * deflections instead of holding one. Guessing a single stick position and
         * re-running costs ~5 minutes a try; a sweep answers "can input move the
-@@ -858,6 +1730,47 @@ skip_inject: ;
+@@ -858,6 +1760,47 @@ skip_inject: ;
                  fprintf(stderr, "[PADSWEEP] step %d: l=(%u,%u) r=(%u,%u)%c", k,
                          steps[k][0], steps[k][1], steps[k][2], steps[k][3], 10); } }
          } } }
@@ -2260,7 +2290,7 @@ index 621d53e..d9f576c 100644
      data->button[CELL_PAD_BTN_OFFSET_ANALOG_RIGHT_X] = hs->analog_rx;
      data->button[CELL_PAD_BTN_OFFSET_ANALOG_RIGHT_Y] = hs->analog_ry;
      data->button[CELL_PAD_BTN_OFFSET_ANALOG_LEFT_X]  = hs->analog_lx;
-@@ -942,6 +1855,29 @@ emit:
+@@ -942,6 +1885,29 @@ emit:
              if (!s_data_fresh[port_no]) data->len = 0;   /* nothing new: end the drain */
              else                        s_data_fresh[port_no] = 0;
          }
@@ -2290,7 +2320,7 @@ index 621d53e..d9f576c 100644
      }
      {
          unsigned int ea = (unsigned int)(uintptr_t)data_guest;
-@@ -952,6 +1888,9 @@ emit:
+@@ -952,6 +1918,9 @@ emit:
      return CELL_OK;
  }
  
@@ -2300,7 +2330,7 @@ index 621d53e..d9f576c 100644
  /* cellPadGetInfo (v1 API, NID 0x3AAAD464) — used by PSL1GHT's ioPadGetInfo.
   * Layout (RPCS3 cellPad.h CellPadInfo, all big-endian):
   *   +0x00 u32 max_connect        +0x04 u32 now_connect   +0x08 u32 system_info
-@@ -995,7 +1934,7 @@ s32 cellPadGetInfo(CellPadInfo2* info)
+@@ -995,7 +1964,7 @@ s32 cellPadGetInfo(CellPadInfo2* info)
                    (s_host_state[i].connected || i == 0));
          vm_write16(gaddr + 0x00C + i * 2, on ? 0x054C : 0);   /* vendor: Sony  */
          vm_write16(gaddr + 0x10A + i * 2, on ? 0x0268 : 0);   /* product: DS3  */
@@ -2309,7 +2339,7 @@ index 621d53e..d9f576c 100644
      }
      return CELL_OK;
  }
-@@ -1022,7 +1961,7 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
+@@ -1022,7 +1991,7 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
           * boot flows that block until a controller is connected can proceed even
           * with no physical device attached. */
          if (s_host_state[i].connected || i == 0) {
@@ -2318,7 +2348,7 @@ index 621d53e..d9f576c 100644
              info->port_setting[i]      = s_port_setting[i];
              info->device_capability[i] = CELL_PAD_CAPABILITY_PS3_CONFORMITY
                                         | CELL_PAD_CAPABILITY_PRESS_MODE
-@@ -1032,7 +1971,7 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
+@@ -1032,7 +2001,7 @@ s32 cellPadGetInfo2(CellPadInfo2* info_guest)
              info->device_type[i]       = CELL_PAD_DEV_TYPE_STANDARD;
              connected++;
          } else {
@@ -2327,7 +2357,7 @@ index 621d53e..d9f576c 100644
          }
      }
      info->now_connect = connected;
-@@ -1077,7 +2016,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
+@@ -1077,7 +2046,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
          /* Same virtual-pad-on-port-0 rule as cellPadGetInfo2, so both views of
           * the ports agree (a game that cross-checks them must see one truth). */
          if ((i < PAD_MAX_HOST_PORTS && s_host_state[i].connected) || i == 0) {
@@ -2336,7 +2366,7 @@ index 621d53e..d9f576c 100644
              info->port_setting[i]      = s_port_setting[i];
              info->device_capability[i] = CELL_PAD_CAPABILITY_PS3_CONFORMITY
                                         | CELL_PAD_CAPABILITY_PRESS_MODE
-@@ -1089,7 +2028,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
+@@ -1089,7 +2058,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
              info->pclass_profile[i]    = 0;
              connected++;
          } else {
@@ -2345,7 +2375,7 @@ index 621d53e..d9f576c 100644
          }
      }
      info->now_connect = connected;
-@@ -1099,7 +2038,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
+@@ -1099,7 +2068,7 @@ s32 cellPadPeriphGetInfo(CellPadPeriphInfo* info_guest)
            vm_write32((unsigned long long)ea + _o, *(u32*)((char*)info + _o)); }
  
      { static int _n = 0;
@@ -2354,7 +2384,7 @@ index 621d53e..d9f576c 100644
            printf("[cellPad] PeriphGetInfo(max=%u now=%u) -> STANDARD class\n",
                   info->max_connect, connected); }
      return CELL_OK;
-@@ -1185,27 +2124,35 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
+@@ -1185,27 +2154,35 @@ s32 cellPadSetActDirect(u32 port_no, CellPadActParam* param)
  
      param = GUEST_PTR(param, CellPadActParam*);
  
@@ -2538,21 +2568,970 @@ index 2521ff0..9ab90ee 100644
  
  #ifdef __cplusplus
  }
+diff --git a/libs/network/cellHttp.c b/libs/network/cellHttp.c
+index d39d88d..309378f 100644
+--- a/libs/network/cellHttp.c
++++ b/libs/network/cellHttp.c
+@@ -11,6 +11,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include "../../runtime/ppu/ppu_memory.h"   /* vm_write*: guest EA -> host, byte-swapped */
++#include "ugc_tls.h"                         /* PS3_UGC_ONLINE https path (no PS3_UGC_PLAIN) */
+ 
+ /* ---------------------------------------------------------------------------
+  * Platform socket abstraction
+@@ -103,6 +104,20 @@ typedef struct {
+ static HttpClientSlot s_clients[CELL_HTTP_MAX_CLIENTS];
+ static HttpTransSlot  s_transactions[CELL_HTTP_MAX_TRANSACTIONS];
+ 
++/* PS3_UGC_ONLINE / PS3_UGC_SERVER (cellNetCtl.c; inFAMOUS 2 / FoB only): the
++ * SDK-shaped client at the end of this file. Off, nothing below changes. */
++int ps3_ugc_online(void);
++int ps3_ugc_server(uint8_t ip[4], uint16_t* port);
++int ps3_ugc_host_match(const char* host);
++const char* ps3_ugc_full_host(const char* label);
++int ugc_dns_resolve(const char* name, uint8_t ip[4]);   /* ugc_dns.c */
++static void ugc_client_reset(u32 id);
++static s32  ugc_create_transaction(CellHttpTransId* transId, CellHttpClientId clientId,
++                                   const char* method, const CellHttpUri* uri);
++static s32  ugc_send_request(u32 transId, u32 buf_ea, u32 size, u32 sent_ea);
++static s32  ugc_recv_response(u32 transId, u32 buf_ea, u32 size, u32 recvd_ea);
++static void ugc_trans_reset(u32 id);
++
+ /* ---------------------------------------------------------------------------
+  * Helpers
+  * -----------------------------------------------------------------------*/
+@@ -349,6 +364,10 @@ s32 cellHttpCreateClient(CellHttpClientId* clientId)
+             s_clients[i].connect_timeout = 30000000;
+             s_clients[i].send_timeout    = 120000000;
+             s_clients[i].recv_timeout    = 120000000;
++            if (ps3_ugc_online()) {
++                ugc_client_reset(i);
++                vm_write32((u32)(uintptr_t)clientId, i);   /* guest memory is big-endian */
++            } else
+             *clientId_h = i;
+             printf("[cellHttp] CreateClient(id=%u)\n", i);
+             return CELL_OK;
+@@ -388,6 +407,9 @@ s32 cellHttpCreateTransaction(CellHttpTransId* transId, CellHttpClientId clientI
+     if (!method || !uri || !transId)
+         return CELL_HTTP_ERROR_INVALID_PARAMETER;
+ 
++    if (ps3_ugc_online())
++        return ugc_create_transaction(transId, clientId, method, uri);
++
+     /* CellHttpUri is { const char* scheme, hostname, path, username,
+      * password; u32 port; } -- five 4-byte EAs then the port, twenty bytes
+      * to the guest against forty to us, so nothing but scheme lines up if
+@@ -458,6 +480,7 @@ s32 cellHttpDestroyTransaction(CellHttpTransId transId)
+ 
+     http_close_slot_socket(&s_transactions[transId]);
+     s_transactions[transId].in_use = 0;
++    if (ps3_ugc_online()) ugc_trans_reset(transId);
+     printf("[cellHttp] DestroyTransaction(trans=%u)\n", transId);
+     return CELL_OK;
+ }
+@@ -471,6 +494,9 @@ s32 cellHttpSendRequest(CellHttpTransId transId, const void* buf, u32 size,
+     if (transId >= CELL_HTTP_MAX_TRANSACTIONS || !s_transactions[transId].in_use)
+         return CELL_HTTP_ERROR_NOT_FOUND;
+ 
++    if (ps3_ugc_online())
++        return ugc_send_request(transId, (u32)(uintptr_t)buf, size, (u32)(uintptr_t)sent);
++
+     HttpTransSlot* t = &s_transactions[transId];
+ 
+     if (t->aborted) {
+@@ -495,7 +521,25 @@ s32 cellHttpSendRequest(CellHttpTransId transId, const void* buf, u32 size,
+     hints.ai_protocol = IPPROTO_TCP;
+ 
+     struct addrinfo* result = NULL;
+-    int gai = getaddrinfo(t->hostname, port_str, &hints, &result);
++    int gai;
++    struct sockaddr_in ugc_sa;
++    struct addrinfo ugc_ai;
++    uint8_t ugc_ip[4]; uint16_t ugc_port;
++    if (ps3_ugc_server(ugc_ip, &ugc_port) && ps3_ugc_host_match(t->hostname)) {
++        /* PS3_UGC_SERVER: no DNS query for the UGC names. */
++        memset(&ugc_sa, 0, sizeof ugc_sa);
++        ugc_sa.sin_family = AF_INET;
++        memcpy(&ugc_sa.sin_addr, ugc_ip, 4);
++        ugc_sa.sin_port = htons((ugc_port && t->port == 80) ? ugc_port : (uint16_t)t->port);
++        memset(&ugc_ai, 0, sizeof ugc_ai);
++        ugc_ai.ai_family = AF_INET; ugc_ai.ai_socktype = SOCK_STREAM; ugc_ai.ai_protocol = IPPROTO_TCP;
++        ugc_ai.ai_addr = (struct sockaddr*)&ugc_sa; ugc_ai.ai_addrlen = sizeof ugc_sa;
++        printf("[cellHttp]   '%s' -> %u.%u.%u.%u:%u (PS3_UGC_SERVER, no DNS)\n", t->hostname,
++               ugc_ip[0], ugc_ip[1], ugc_ip[2], ugc_ip[3], ntohs(ugc_sa.sin_port));
++        result = &ugc_ai; gai = 0;
++    } else
++        gai = getaddrinfo(t->hostname, port_str, &hints, &result);
++#define freeaddrinfo(r) do { if ((r) != &ugc_ai) freeaddrinfo(r); } while (0)
+     if (gai != 0 || !result) {
+         printf("[cellHttp]   getaddrinfo failed for '%s': %d\n", t->hostname, gai);
+         if (result) freeaddrinfo(result);
+@@ -527,6 +571,7 @@ s32 cellHttpSendRequest(CellHttpTransId transId, const void* buf, u32 size,
+     }
+ 
+     freeaddrinfo(result);
++#undef freeaddrinfo
+     printf("[cellHttp]   Connected to %s:%u\n", t->hostname, t->port);
+ 
+     /* ---- Format HTTP request ---- */
+@@ -603,6 +648,9 @@ s32 cellHttpRecvResponse(CellHttpTransId transId, void* buf, u32 size,
+     if (transId >= CELL_HTTP_MAX_TRANSACTIONS || !s_transactions[transId].in_use)
+         return CELL_HTTP_ERROR_NOT_FOUND;
+ 
++    if (ps3_ugc_online())
++        return ugc_recv_response(transId, (u32)(uintptr_t)buf, size, (u32)(uintptr_t)received);
++
+     HttpTransSlot* t = &s_transactions[transId];
+ 
+     if (t->aborted) {
+@@ -900,3 +948,592 @@ s32 cellHttpAbortTransaction(CellHttpTransId transId)
+     printf("[cellHttp] AbortTransaction(trans=%u)\n", transId);
+     return CELL_OK;
+ }
++
++/* ===========================================================================
++ * PS3_UGC_ONLINE: cellHttp in the SDK's shape (inFAMOUS 2 / FoB only)
++ *
++ * What the game does (inFAMOUS 2, func_004CBF10 .. func_004CD380):
++ *   CreateClient(&id); ClientSetSendTimeout / SetRecvTimeout / SetConnTimeout
++ *   (25 s); ClientSetSslCallback; ClientSetHeader per header; ParseUri(NULL,..)
++ *   then ParseUri(uri, url, pool, 0x200); CreateTransaction(&t, id, method,
++ *   &uri); RequestSetContentLength(t, n) + SendRequest(t, chunk, len, &sent)
++ *   in a loop; ResponseGetStatusCode(t, &code) with no RecvResponse before it
++ *   (so it reads the header); ResponseGetAllHeaders(t, NULL, NULL, NULL, 0,
++ *   &req) then (t, &hdrs, &items, pool, req, &req); RecvResponse(t, buf, 0x200,
++ *   &got) until got == 0; DestroyTransaction; DestroyClient.
++ * Plain HTTP/1.1 only: Host, the client's headers, Content-Length or a
++ * chunked body (when the game set Transfer-Encoding: chunked) on the way out,
++ * Content-Length / chunked / until-close on the way in, Connection: close.
++ * https is refused with a log line: there is no TLS client here.
++ * Pointers are guest addresses; every guest write is big-endian.
++ * ==========================================================================*/
++#include "../../runtime/ppu/ppu_context.h"
++#include "../../include/ps3emu/nid.h"
++extern void ps3_hle_register_ctx(uint32_t nid, const char* name, void (*fn)(ppu_context*));
++
++#define UGC_MAX_HDR 24
++typedef struct { char name[64]; char value[512]; } UgcHdr;
++typedef struct {
++    UgcHdr hdr[UGC_MAX_HDR]; u32 nhdr;
++    s64    conn_us, send_us, recv_us;
++    u32    ssl_cb, ssl_arg;
++} UgcClient;
++typedef struct {
++    char   scheme[16];
++    int    head_sent;        /* request line + headers are out */
++    int    chunked_out;      /* request body goes chunked */
++    int    out_done;         /* the request (incl. a final 0-chunk) is complete */
++    u64    out_len;          /* RequestSetContentLength, valid if out_len_set */
++    int    out_len_set;
++    u64    out_sent;
++    int    chunked_in;       /* response is chunked */
++    u64    in_chunk_left;    /* bytes left in the current chunk */
++    int    in_done;
++    void*  tls;              /* ugc_tls* when the connection is TLS; NULL for plain */
++    FILE*  body_f;           /* PS3_UGC_BODYLOG=<dir>: response body dump */
++    char   raw_hdr[HTTP_HDR_BUF_SIZE];   /* response header block, NUL-ended */
++} UgcTrans;
++static UgcClient s_ugc_c[CELL_HTTP_MAX_CLIENTS];
++static UgcTrans  s_ugc_t[CELL_HTTP_MAX_TRANSACTIONS];
++
++static void ugc_client_reset(u32 id)
++{
++    if (id >= CELL_HTTP_MAX_CLIENTS) return;
++    memset(&s_ugc_c[id], 0, sizeof s_ugc_c[id]);
++    s_ugc_c[id].conn_us = 30000000; s_ugc_c[id].send_us = 120000000; s_ugc_c[id].recv_us = 120000000;
++}
++static void ugc_trans_reset(u32 id)
++{
++    if (id < CELL_HTTP_MAX_TRANSACTIONS) {
++        if (s_ugc_t[id].tls) { ugc_tls_close((ugc_tls*)s_ugc_t[id].tls); free(s_ugc_t[id].tls); }
++        if (s_ugc_t[id].body_f) fclose(s_ugc_t[id].body_f);
++        memset(&s_ugc_t[id], 0, sizeof s_ugc_t[id]);
++    }
++}
++static int ugc_valid_trans(u32 id)
++{
++    return s_http_initialized && id < CELL_HTTP_MAX_TRANSACTIONS && s_transactions[id].in_use;
++}
++static int ugc_valid_client(u32 id)
++{
++    return s_http_initialized && id < CELL_HTTP_MAX_CLIENTS && s_clients[id].in_use;
++}
++static void ugc_gstr(u32 ea, char* out, size_t cap)
++{
++    out[0] = 0;
++    if (!ea || !cap) return;
++    size_t i = 0;
++    for (; i + 1 < cap; i++) { char c = (char)vm_read8(ea + (u32)i); if (!c) break; out[i] = c; }
++    out[i] = 0;
++}
++static const UgcHdr* ugc_client_hdr(u32 client, const char* name)
++{
++    UgcClient* c = &s_ugc_c[client];
++    for (u32 i = 0; i < c->nhdr; i++)
++        if (http_strcasestr(c->hdr[i].name, name) == c->hdr[i].name && strlen(c->hdr[i].name) == strlen(name))
++            return &c->hdr[i];
++    return NULL;
++}
++
++/* CellHttpUri (SDK, 28 bytes): scheme, hostname, username, password, path
++ * (guest char*), u32 port, 4 reserved. cellHttpUtilParseUri writes the same
++ * layout under PS3_UGC_ONLINE (cellHttpUtil.c). */
++static s32 ugc_create_transaction(CellHttpTransId* transId, CellHttpClientId clientId,
++                                  const char* method, const CellHttpUri* uri)
++{
++    const u32 uea = (u32)(uintptr_t)uri;
++    if (!ugc_valid_client(clientId)) return CELL_HTTP_ERROR_NOT_FOUND;
++    for (u32 i = 0; i < CELL_HTTP_MAX_TRANSACTIONS; i++) {
++        if (s_transactions[i].in_use) continue;
++        HttpTransSlot* t = &s_transactions[i];
++        UgcTrans* u = &s_ugc_t[i];
++        memset(t, 0, sizeof(*t));
++        ugc_trans_reset(i);
++        t->in_use = 1; t->client = clientId; t->sock = HTTP_INVALID_SOCKET;
++        ugc_gstr((u32)(uintptr_t)method, t->method, sizeof t->method);
++        ugc_gstr(vm_read32(uea + 0), u->scheme, sizeof u->scheme);
++        ugc_gstr(vm_read32(uea + 4), t->hostname, sizeof t->hostname);
++        {   /* restore the full UGC host the game truncated to its first label */
++            const char* full = ps3_ugc_full_host(t->hostname);
++            if (full) {
++                printf("[cellHttp]   host '%s' -> '%s' (restored full UGC host)\n", t->hostname, full);
++                strncpy(t->hostname, full, sizeof t->hostname - 1);
++                t->hostname[sizeof t->hostname - 1] = 0;
++            }
++        }
++        {   /* wire host table: the name the UGC server routes on (SNI + Host). The server
++             * (2026-11-13 probe) answers only for these two names; "static" was
++             * historically a CDN name. Edit the table if the operator changes it. */
++            static const struct { const char* from; const char* wire; } kWire[] = {
++                { "static",                                      "dbhhpqias9rrc.cloudfront.net" },
++                { "static.infamous2-release.ps3.online.scea.com", "dbhhpqias9rrc.cloudfront.net" },
++                { "infamous2",                                   "infamous2-release.ps3.online.scea.com" },
++            };
++            for (size_t k = 0; k < sizeof kWire / sizeof kWire[0]; k++)
++                if (!strcmp(t->hostname, kWire[k].from)) {
++                    printf("[cellHttp]   wire host '%s' -> '%s'\n", t->hostname, kWire[k].wire);
++                    strncpy(t->hostname, kWire[k].wire, sizeof t->hostname - 1);
++                    break;
++                }
++        }
++        if (getenv("PS3_UGC_HOSTDBG")) {
++            u32 hea = vm_read32(uea + 4);
++            printf("[ugc-hostdbg] hostname_ea=0x%08X bytes:", hea);
++            for (int k = -4; k < 56; k++) {
++                u8 c = vm_read8(hea + (u32)k);
++                printf(" %02X%s", c, (c >= 32 && c < 127) ? "" : ".");
++            }
++            printf("\n");
++        }
++        ugc_gstr(vm_read32(uea + 16), t->path, sizeof t->path);
++        if (!t->path[0]) strcpy(t->path, "/");
++        {   /* The game builds its initial-list URL as initiallisturl + "_language=N"
++             * (func_004C9DF8, format 0x7D3C08). The live UGC server only answers
++             * that file without the suffix; it ignores a query. ".json_language="
++             * -> ".json?language=" (UGC path only: this function runs only under
++             * PS3_UGC_ONLINE). */
++            char* q = strstr(t->path, ".json_language=");
++            if (q && !strchr(t->path, '?')) {
++                char orig[sizeof t->path];
++                strcpy(orig, t->path);
++                q[5] = '?';   /* ".json_language=" -> ".json?language=" */
++                printf("[cellHttp]   path '%s' -> '%s' (UGC initial-list suffix)\n", orig, t->path);
++            }
++        }
++        if (!u->scheme[0]) strcpy(u->scheme, "http");
++        t->port = vm_read32(uea + 20);
++        if (!t->port) t->port = strcmp(u->scheme, "https") ? 80 : 443;
++        snprintf(t->url, sizeof t->url, "%s://%s:%u%s", u->scheme, t->hostname, t->port, t->path);
++        vm_write32((u32)(uintptr_t)transId, i);
++        printf("[cellHttp] CreateTransaction(client=%u, %s %s) -> trans=%u\n", clientId, t->method, t->url, i);
++        return CELL_OK;
++    }
++    return CELL_HTTP_ERROR_NO_MEMORY;
++}
++
++int ps3_ugc_plain(void);
++
++/* TLS-or-plain I/O for the UGC http client. u->tls set => TLS record layer. */
++static int ugc_io_send(HttpTransSlot* t, UgcTrans* u, const void* b, int n)
++{
++    if (u->tls) return ugc_tls_write((ugc_tls*)u->tls, b, n) == n ? 0 : -1;
++    return http_send_all(t->sock, (const char*)b, (u32)n);
++}
++static int ugc_io_recv(HttpTransSlot* t, UgcTrans* u, void* b, int n)
++{
++    if (u->tls) return ugc_tls_read((ugc_tls*)u->tls, b, n);
++    return recv(t->sock, (char*)b, n, 0);
++}
++
++static int ugc_connect(HttpTransSlot* t, UgcTrans* u)
++{
++    const int https = !strcmp(u->scheme, "https");
++    const int plain = https && ps3_ugc_plain();
++    if (https && !plain) printf("[cellHttp]   %s: TLS 1.2 (PS3_UGC_ONLINE; cert NOT verified)\n", t->url);
++    else if (https) printf("[cellHttp]   %s: fetched as PLAIN HTTP (PS3_UGC_PLAIN, test only: no TLS)\n", t->url);
++    struct sockaddr_in sa;
++    memset(&sa, 0, sizeof sa);
++    sa.sin_family = AF_INET;
++    sa.sin_port = htons((uint16_t)t->port);
++    uint8_t ip[4]; uint16_t port;
++    unsigned a, b, c, d; char tail;
++    if (ps3_ugc_server(ip, &port) && ps3_ugc_host_match(t->hostname)) {
++        memcpy(&sa.sin_addr, ip, 4);
++        if (port && (t->port == 80 || (https && t->port == 443))) sa.sin_port = htons(port);
++        printf("[cellHttp]   '%s' -> %u.%u.%u.%u:%u (PS3_UGC_SERVER, no DNS)\n", t->hostname,
++               ip[0], ip[1], ip[2], ip[3], ntohs(sa.sin_port));
++    } else if (sscanf(t->hostname, "%u.%u.%u.%u%c", &a, &b, &c, &d, &tail) == 4 && a < 256 && b < 256 && c < 256 && d < 256) {
++        uint8_t q[4] = { (uint8_t)a, (uint8_t)b, (uint8_t)c, (uint8_t)d };
++        memcpy(&sa.sin_addr, q, 4);
++    } else if (ps3_ugc_online()) {
++        /* UGC mode never calls getaddrinfo (the PS5 has none): own DNS client. */
++        uint8_t dip[4];
++        if (ugc_dns_resolve(t->hostname, dip) != 0) {
++            printf("[cellHttp]   resolve failed for '%s' (ugc dns)\n", t->hostname);
++            return -1;
++        }
++        memcpy(&sa.sin_addr, dip, 4);
++    } else {
++        struct addrinfo hints, *res = NULL;
++        memset(&hints, 0, sizeof hints);
++        hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
++        if (getaddrinfo(t->hostname, NULL, &hints, &res) != 0 || !res) {
++            printf("[cellHttp]   resolve failed for '%s'\n", t->hostname);
++            return -1;
++        }
++        sa.sin_addr = ((struct sockaddr_in*)res->ai_addr)->sin_addr;
++        freeaddrinfo(res);
++    }
++    http_socket_t s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
++    if (s == HTTP_INVALID_SOCKET) return -1;
++    UgcClient* cl = &s_ugc_c[t->client];
++    http_apply_timeout(s, 1, (u32)(cl->conn_us > 0 && cl->conn_us < 0xFFFFFFFFll ? cl->conn_us : 30000000));
++    if (connect(s, (struct sockaddr*)&sa, sizeof sa) != 0) {
++        printf("[cellHttp]   connect() failed to %s:%u\n", t->hostname, ntohs(sa.sin_port));
++        http_closesocket(s);
++        return -1;
++    }
++    http_apply_timeout(s, 1, (u32)(cl->send_us > 0 && cl->send_us < 0xFFFFFFFFll ? cl->send_us : 120000000));
++    http_apply_timeout(s, 0, (u32)(cl->recv_us > 0 && cl->recv_us < 0xFFFFFFFFll ? cl->recv_us : 120000000));
++    t->sock = s;
++    printf("[cellHttp]   Connected to %s:%u\n", t->hostname, ntohs(sa.sin_port));
++    if (https && !plain) {
++        ugc_tls* tls = (ugc_tls*)malloc(sizeof(ugc_tls));
++        int rc = ugc_tls_connect(tls, s, t->hostname);
++        if (rc != 0) {
++            printf("[cellHttp]   TLS handshake failed (rc=%d) for %s\n", rc, t->hostname);
++            free(tls); http_closesocket(s); t->sock = HTTP_INVALID_SOCKET;
++            return -1;
++        }
++        u->tls = tls;
++        printf("[cellHttp]   TLS 1.2 established with %s (cert not verified)\n", t->hostname);
++    }
++    return 0;
++}
++
++static int ugc_send_guest(HttpTransSlot* t, UgcTrans* u, u32 ea, u32 len)
++{
++    char tmp[4096];
++    while (len) {
++        u32 n = len < sizeof tmp ? len : (u32)sizeof tmp;
++        vm_memcpy_from(tmp, ea, n);
++        if (ugc_io_send(t, u, tmp, (int)n) != 0) return -1;
++        ea += n; len -= n;
++    }
++    return 0;
++}
++
++static s32 ugc_send_request(u32 transId, u32 buf_ea, u32 size, u32 sent_ea)
++{
++    if (!ugc_valid_trans(transId)) return CELL_HTTP_ERROR_NOT_FOUND;
++    HttpTransSlot* t = &s_transactions[transId];
++    UgcTrans* u = &s_ugc_t[transId];
++    if (sent_ea) vm_write32(sent_ea, 0);
++    if (t->aborted) return CELL_HTTP_ERROR_ABORTED;
++    if (!buf_ea) size = 0;
++    printf("[cellHttp] SendRequest(trans=%u, %s %s, size=%u)\n", transId, t->method, t->url, size);
++    if (!u->head_sent) {
++        if (ugc_connect(t, u) != 0) return CELL_HTTP_ERROR_CONNECTION_FAILED;
++        const UgcHdr* te = ugc_client_hdr(t->client, "Transfer-Encoding");
++        u->chunked_out = !u->out_len_set && te && http_strcasestr(te->value, "chunked");
++        static char req[16384];
++        int n = snprintf(req, sizeof req, "%s %s HTTP/1.1\r\n", t->method, t->path);
++        if (!ugc_client_hdr(t->client, "Host")) {
++            if (t->port == 80 || (t->port == 443 && !strcmp(u->scheme, "https")))
++                n += snprintf(req + n, sizeof req - (size_t)n, "Host: %s\r\n", t->hostname);
++            else n += snprintf(req + n, sizeof req - (size_t)n, "Host: %s:%u\r\n", t->hostname, t->port);
++        }
++        UgcClient* cl = &s_ugc_c[t->client];
++        for (u32 i = 0; i < cl->nhdr && n < (int)sizeof req - 600; i++) {
++            const char* nm = cl->hdr[i].name;
++            if (!strcmp(nm, "") ) continue;
++            if (http_strcasestr(nm, "Content-Length") == nm || http_strcasestr(nm, "Connection") == nm) continue;
++            if (http_strcasestr(nm, "Transfer-Encoding") == nm && !u->chunked_out) continue;
++            n += snprintf(req + n, sizeof req - (size_t)n, "%s: %s\r\n", nm, cl->hdr[i].value);
++        }
++        if (u->out_len_set)
++            n += snprintf(req + n, sizeof req - (size_t)n, "Content-Length: %llu\r\n", (unsigned long long)u->out_len);
++        else if (!u->chunked_out && (size || !strcmp(t->method, "POST") || !strcmp(t->method, "PUT")))
++            n += snprintf(req + n, sizeof req - (size_t)n, "Content-Length: %u\r\n", size);
++        n += snprintf(req + n, sizeof req - (size_t)n, "Connection: close\r\n\r\n");
++        if (ugc_io_send(t, u, req, n) != 0) {
++            printf("[cellHttp]   send of the request header failed\n");
++            http_close_slot_socket(t);
++            return CELL_HTTP_ERROR_SEND_FAILED;
++        }
++        u->head_sent = 1;
++        printf("[cellHttp]   request header (%d bytes):\n%.*s", n, n, req);
++    }
++    if (size) {
++        if (u->out_len_set && u->out_sent + size > u->out_len) size = (u32)(u->out_len - u->out_sent);
++        if (u->chunked_out) {
++            char line[24]; int ln = snprintf(line, sizeof line, "%X\r\n", size);
++            if (ugc_io_send(t, u, line, ln) || ugc_send_guest(t, u, buf_ea, size) ||
++                ugc_io_send(t, u, "\r\n", 2))
++                return CELL_HTTP_ERROR_SEND_FAILED;
++        } else if (ugc_send_guest(t, u, buf_ea, size) != 0)
++            return CELL_HTTP_ERROR_SEND_FAILED;
++        u->out_sent += size;
++        printf("[cellHttp]   body %u bytes (total %llu)\n", size, (unsigned long long)u->out_sent);
++    }
++    if (sent_ea) vm_write32(sent_ea, size);
++    return CELL_OK;
++}
++
++/* Finish the request (final chunk) and read the response header once. */
++static s32 ugc_read_head(u32 transId)
++{
++    HttpTransSlot* t = &s_transactions[transId];
++    UgcTrans* u = &s_ugc_t[transId];
++    if (t->headers_parsed) return CELL_OK;
++    if (t->aborted) return CELL_HTTP_ERROR_ABORTED;
++    if (!u->head_sent) {   /* a GET whose SendRequest never ran */
++        s32 r = ugc_send_request(transId, 0, 0, 0);
++        if (r) return r;
++    }
++    if (u->chunked_out && !u->out_done) ugc_io_send(t, u, "0\r\n\r\n", 5);
++    u->out_done = 1;
++    for (;;) {
++        const char* end = NULL;
++        while (!(end = http_find_header_end(t->hdr_buf, t->hdr_buf_len))) {
++            if (t->hdr_buf_len >= HTTP_HDR_BUF_SIZE - 1) return CELL_HTTP_ERROR_RECV_FAILED;
++            int n = ugc_io_recv(t, u, t->hdr_buf + t->hdr_buf_len, (int)(HTTP_HDR_BUF_SIZE - 1 - t->hdr_buf_len));
++            if (n <= 0) {
++                printf("[cellHttp]   recv() failed during header read (n=%d)\n", n);
++                return t->aborted ? CELL_HTTP_ERROR_ABORTED : CELL_HTTP_ERROR_RECV_FAILED;
++            }
++            t->hdr_buf_len += (u32)n;
++        }
++        int st = 0, ma = 0, mi = 0;
++        sscanf(t->hdr_buf, "HTTP/%d.%d %d", &ma, &mi, &st);
++        if (st == 100) {   /* 100 Continue: drop it, read the real header */
++            u32 used = (u32)(end - t->hdr_buf);
++            memmove(t->hdr_buf, end, t->hdr_buf_len - used);
++            t->hdr_buf_len -= used;
++            continue;
++        }
++        u32 hl = (u32)(end - t->hdr_buf);
++        memcpy(u->raw_hdr, t->hdr_buf, hl < sizeof u->raw_hdr ? hl : sizeof u->raw_hdr - 1);
++        u->raw_hdr[hl < sizeof u->raw_hdr ? hl : sizeof u->raw_hdr - 1] = 0;
++        if (http_parse_response_headers(t, end) != 0) return CELL_HTTP_ERROR_RECV_FAILED;
++        const char* te = http_strcasestr(u->raw_hdr, "\ntransfer-encoding:");
++        u->chunked_in = te && http_strcasestr(te, "chunked") && http_strcasestr(te, "chunked") < strchr(te + 1, '\n');
++        if (u->chunked_in) t->content_length_known = 0;
++        printf("[cellHttp]   response header:\n%s", u->raw_hdr);
++        return CELL_OK;
++    }
++}
++
++/* Raw body bytes: leftover from the header read first, then the socket. */
++static int ugc_raw_read(HttpTransSlot* t, char* dst, u32 want)
++{
++    if (t->body_overflow_len) {
++        u32 n = want < t->body_overflow_len ? want : t->body_overflow_len;
++        memcpy(dst, t->body_overflow, n);
++        memmove(t->body_overflow, t->body_overflow + n, t->body_overflow_len - n);
++        t->body_overflow_len -= n;
++        return (int)n;
++    }
++    return ugc_io_recv(t, &s_ugc_t[t - s_transactions], dst, (int)want);
++}
++static int ugc_read_line(HttpTransSlot* t, char* line, u32 cap)
++{
++    u32 n = 0;
++    while (n + 1 < cap) {
++        char c;
++        int r = ugc_raw_read(t, &c, 1);
++        if (r <= 0) return -1;
++        if (c == '\n') break;
++        if (c != '\r') line[n++] = c;
++    }
++    line[n] = 0;
++    return (int)n;
++}
++
++static s32 ugc_recv_response(u32 transId, u32 buf_ea, u32 size, u32 recvd_ea)
++{
++    if (!ugc_valid_trans(transId)) return CELL_HTTP_ERROR_NOT_FOUND;
++    HttpTransSlot* t = &s_transactions[transId];
++    UgcTrans* u = &s_ugc_t[transId];
++    if (recvd_ea) vm_write32(recvd_ea, 0);
++    s32 r = ugc_read_head(transId);
++    if (r) return r;
++    if (!buf_ea || !size || u->in_done) return CELL_OK;
++    static char tmp[65536];
++    u32 got = 0;
++    while (got < size && !u->in_done) {
++        u32 want = size - got;
++        if (want > sizeof tmp) want = sizeof tmp;
++        if (u->chunked_in) {
++            if (!u->in_chunk_left) {
++                char line[64];
++                if (ugc_read_line(t, line, sizeof line) < 0) { u->in_done = 1; break; }
++                if (!line[0] && ugc_read_line(t, line, sizeof line) < 0) { u->in_done = 1; break; }
++                u->in_chunk_left = strtoull(line, NULL, 16);
++                if (!u->in_chunk_left) {   /* last chunk; skip trailers */
++                    while (ugc_read_line(t, line, sizeof line) > 0) {}
++                    u->in_done = 1; break;
++                }
++            }
++            if (want > u->in_chunk_left) want = (u32)u->in_chunk_left;
++        } else if (t->content_length_known) {
++            u64 left = t->content_length - t->body_received;
++            if (!left) { u->in_done = 1; break; }
++            if (want > left) want = (u32)left;
++        }
++        int n = ugc_raw_read(t, tmp, want);
++        if (n <= 0) {
++            if (n < 0 && !got && !t->aborted && t->content_length_known) return CELL_HTTP_ERROR_RECV_FAILED;
++            u->in_done = 1; break;
++        }
++        vm_memcpy_to(buf_ea + got, tmp, (size_t)n);
++        {   /* PS3_UGC_BODYLOG=<dir>: save each response body (formats for the report) */
++            static int seq = 0;
++            const char* dir = getenv("PS3_UGC_BODYLOG");
++            if (dir && !u->body_f) {
++                char fn[600]; snprintf(fn, sizeof fn, "%s/resp_%03d.bin", dir, ++seq);
++                u->body_f = fopen(fn, "wb");
++                printf("[cellHttp]   body of %s %s -> %s\n", t->method, t->url, fn);
++            }
++            if (u->body_f) { fwrite(tmp, 1, (size_t)n, u->body_f); fflush(u->body_f); }
++        }
++        got += (u32)n; t->body_received += (u32)n;
++        if (u->chunked_in) u->in_chunk_left -= (u32)n;
++        if (got) break;   /* hand back what arrived, as recv would */
++    }
++    if (t->aborted && !got) return CELL_HTTP_ERROR_ABORTED;
++    if (recvd_ea) vm_write32(recvd_ea, got);
++    printf("[cellHttp] RecvResponse(trans=%u, %u) -> %u bytes%s\n", transId, size, got, u->in_done && !got ? " (end)" : "");
++    return CELL_OK;
++}
++
++/* ---- the nine imports the generic table never bound (ctx handlers) ----
++ * Off (no PS3_UGC_ONLINE) each answers CELL_OK and writes nothing: exactly the
++ * unresolved-NID fake the game got before. */
++#define R32(n) ((u32)ctx->gpr[n])
++#define RET(v) (ctx->gpr[3] = (uint64_t)(int64_t)(s32)(v))
++
++static void h_resp_status(ppu_context* ctx)    /* (transId, s32* statusCode) */
++{
++    if (!ps3_ugc_online()) { RET(0); return; }
++    u32 id = R32(3), out = R32(4);
++    if (!ugc_valid_trans(id)) { RET(CELL_HTTP_ERROR_NOT_FOUND); return; }
++    if (!out) { RET(CELL_HTTP_ERROR_INVALID_PARAMETER); return; }
++    s32 r = ugc_read_head(id);
++    if (r) { RET(r); return; }
++    vm_write32(out, (u32)s_transactions[id].status_code);
++    printf("[cellHttp] ResponseGetStatusCode(trans=%u) -> %d\n", id, s_transactions[id].status_code);
++    RET(0);
++}
++
++/* (transId, CellHttpHeader** headers, u32* items, void* pool, u32 poolSize,
++ *  u32* required). CellHttpHeader = { char* name; char* value; } (8 bytes);
++ * the array and the strings live in the pool. */
++static void h_resp_all_headers(ppu_context* ctx)
++{
++    if (!ps3_ugc_online()) { RET(0); return; }
++    u32 id = R32(3), hdrs = R32(4), items = R32(5), pool = R32(6), psize = R32(7), req = R32(8);
++    if (!ugc_valid_trans(id)) { RET(CELL_HTTP_ERROR_NOT_FOUND); return; }
++    s32 r = ugc_read_head(id);
++    if (r) { RET(r); return; }
++    const char* h = s_ugc_t[id].raw_hdr;
++    const char* p = strstr(h, "\r\n");   /* skip the status line */
++    u32 n = 0, strs = 0;
++    for (const char* q = p ? p + 2 : h + strlen(h); *q; ) {
++        const char* e = strstr(q, "\r\n"); if (!e) e = q + strlen(q);
++        const char* c = memchr(q, ':', (size_t)(e - q));
++        if (c) { n++; strs += (u32)(c - q) + 1; const char* v = c + 1; while (v < e && *v == ' ') v++; strs += (u32)(e - v) + 1; }
++        q = *e ? e + 2 : e;
++    }
++    u32 need = n * 8 + strs;
++    if (req) vm_write32(req, need);
++    if (!pool) { RET(0); return; }
++    if (psize < need) { RET(CELL_HTTP_ERROR_NO_BUFFER); return; }
++    u32 arr = pool, sp = pool + n * 8, i = 0;
++    for (const char* q = p ? p + 2 : h + strlen(h); *q; ) {
++        const char* e = strstr(q, "\r\n"); if (!e) e = q + strlen(q);
++        const char* c = memchr(q, ':', (size_t)(e - q));
++        if (c) {
++            const char* v = c + 1; while (v < e && *v == ' ') v++;
++            u32 nl = (u32)(c - q), vl = (u32)(e - v);
++            vm_write32(arr + i * 8, sp);     vm_memcpy_to(sp, q, nl); vm_write8(sp + nl, 0); sp += nl + 1;
++            vm_write32(arr + i * 8 + 4, sp); vm_memcpy_to(sp, v, vl); vm_write8(sp + vl, 0); sp += vl + 1;
++            i++;
++        }
++        q = *e ? e + 2 : e;
++    }
++    if (hdrs) vm_write32(hdrs, arr);
++    if (items) vm_write32(items, n);
++    printf("[cellHttp] ResponseGetAllHeaders(trans=%u) -> %u headers, %u bytes\n", id, n, need);
++    RET(0);
++}
++
++static void h_client_set_header(ppu_context* ctx)   /* (clientId, const CellHttpHeader*) */
++{
++    if (!ps3_ugc_online()) { RET(0); return; }
++    u32 id = R32(3), hp = R32(4);
++    if (!ugc_valid_client(id)) { RET(CELL_HTTP_ERROR_NOT_FOUND); return; }
++    if (!hp) { RET(CELL_HTTP_ERROR_INVALID_PARAMETER); return; }
++    char name[64], value[512];
++    ugc_gstr(vm_read32(hp), name, sizeof name);
++    ugc_gstr(vm_read32(hp + 4), value, sizeof value);
++    if (!name[0]) { RET(CELL_HTTP_ERROR_INVALID_PARAMETER); return; }
++    UgcClient* c = &s_ugc_c[id];
++    UgcHdr* slot = (UgcHdr*)ugc_client_hdr(id, name);
++    if (!slot) {
++        if (c->nhdr >= UGC_MAX_HDR) { RET(CELL_HTTP_ERROR_NO_BUFFER); return; }
++        slot = &c->hdr[c->nhdr++];
++    }
++    strcpy(slot->name, name); strcpy(slot->value, value);
++    printf("[cellHttp] ClientSetHeader(client=%u, '%s: %s')\n", id, name, value);
++    RET(0);
++}
++
++static void h_req_content_length(ppu_context* ctx)   /* (transId, u64 totalSize) */
++{
++    if (!ps3_ugc_online()) { RET(0); return; }
++    u32 id = R32(3);
++    if (!ugc_valid_trans(id)) { RET(CELL_HTTP_ERROR_NOT_FOUND); return; }
++    if (s_ugc_t[id].head_sent) { RET(CELL_HTTP_ERROR_UNKNOWN); return; }
++    s_ugc_t[id].out_len = ctx->gpr[4];
++    s_ugc_t[id].out_len_set = 1;
++    printf("[cellHttp] RequestSetContentLength(trans=%u, %llu)\n", id, (unsigned long long)ctx->gpr[4]);
++    RET(0);
++}
++
++static void ugc_set_timeout(ppu_context* ctx, int which, const char* nm)   /* (clientId, s64 usec) */
++{
++    if (!ps3_ugc_online()) { RET(0); return; }
++    u32 id = R32(3);
++    if (!ugc_valid_client(id)) { RET(CELL_HTTP_ERROR_NOT_FOUND); return; }
++    s64 us = (s64)ctx->gpr[4];
++    if (which == 0) s_ugc_c[id].conn_us = us; else if (which == 1) s_ugc_c[id].send_us = us; else s_ugc_c[id].recv_us = us;
++    printf("[cellHttp] ClientSet%sTimeout(client=%u, %lld us)\n", nm, id, (long long)us);
++    RET(0);
++}
++static void h_conn_timeout(ppu_context* ctx) { ugc_set_timeout(ctx, 0, "Conn"); }
++static void h_send_timeout(ppu_context* ctx) { ugc_set_timeout(ctx, 1, "Send"); }
++static void h_recv_timeout(ppu_context* ctx) { ugc_set_timeout(ctx, 2, "Recv"); }
++
++static void h_ssl_callback(ppu_context* ctx)   /* (clientId, cb, userArg): stored; no TLS */
++{
++    if (!ps3_ugc_online()) { RET(0); return; }
++    u32 id = R32(3);
++    if (!ugc_valid_client(id)) { RET(CELL_HTTP_ERROR_NOT_FOUND); return; }
++    s_ugc_c[id].ssl_cb = R32(4); s_ugc_c[id].ssl_arg = R32(5);
++    printf("[cellHttp] ClientSetSslCallback(client=%u, cb=0x%08X) (stored; TLS not implemented)\n", id, R32(4));
++    RET(0);
++}
++
++static void h_abort_connection(ppu_context* ctx)   /* (transId) */
++{
++    if (!ps3_ugc_online()) { RET(0); return; }
++    u32 id = R32(3);
++    if (!ugc_valid_trans(id)) { RET(CELL_HTTP_ERROR_NOT_FOUND); return; }
++    HttpTransSlot* t = &s_transactions[id];
++    t->aborted = 1;
++    /* shutdown, not close: the HTTP thread may sit in recv on it. */
++    if (t->sock != HTTP_INVALID_SOCKET) shutdown(t->sock, 2);
++    printf("[cellHttp] TransactionAbortConnection(trans=%u)\n", id);
++    RET(0);
++}
++#undef R32
++#undef RET
++
++/* Called with the other ctx registrations (np_score_register_ctx). */
++void cellhttp_ugc_register_ctx(void)
++{
++    static const struct { const char* name; void (*fn)(ppu_context*); } tab[] = {
++        { "cellHttpResponseGetStatusCode",      h_resp_status },
++        { "cellHttpResponseGetAllHeaders",      h_resp_all_headers },
++        { "cellHttpClientSetHeader",            h_client_set_header },
++        { "cellHttpRequestSetContentLength",    h_req_content_length },
++        { "cellHttpClientSetConnTimeout",       h_conn_timeout },
++        { "cellHttpClientSetSendTimeout",       h_send_timeout },
++        { "cellHttpClientSetRecvTimeout",       h_recv_timeout },
++        { "cellHttpClientSetSslCallback",       h_ssl_callback },
++        { "cellHttpTransactionAbortConnection", h_abort_connection },
++    };
++    for (size_t i = 0; i < sizeof tab / sizeof tab[0]; i++)
++        ps3_hle_register_ctx(ps3_compute_nid(tab[i].name), tab[i].name, tab[i].fn);
++}
+diff --git a/libs/network/cellHttpUtil.c b/libs/network/cellHttpUtil.c
+index 2c557f4..ba30258 100644
+--- a/libs/network/cellHttpUtil.c
++++ b/libs/network/cellHttpUtil.c
+@@ -38,9 +38,71 @@ static int is_unreserved(u8 c)
+  * URL parsing
+  * -----------------------------------------------------------------------*/
+ 
++/* PS3_UGC_ONLINE (cellNetCtl.c; inFAMOUS 2 / FoB only): the SDK's
++ * cellHttpUtilParseUri. CellHttpUri is 28 bytes of guest pointers into the
++ * caller's pool -- scheme, hostname, username, password, path (with the
++ * query) -- then u32 port and 4 reserved bytes; uri == NULL or pool == NULL
++ * only reports the pool size needed. inFAMOUS 2 calls (NULL, url, NULL, 0,
++ * &req) and then (uri, url, obj+0xB0, 0x200, NULL); the old answer to the
++ * first call (INVALID_PARAM) made it give up before any request. */
++int ps3_ugc_online(void);
++
++static s32 ugc_parse_uri(u32 uri_ea, u32 url_ea, u32 pool, u32 pool_size, u32 req_ea)
++{
++    const char* url = (const char*)vm_ptr8(url_ea);
++    const char* p = url;
++    const char *sc = "", *ho = "", *us = "", *pw = "", *pa = "/";
++    u32 scl = 0, hol = 0, usl = 0, pwl = 0, pal = 1, port = 0;
++    const char* c = strstr(p, "://");
++    if (c) { sc = p; scl = (u32)(c - p); p = c + 3; }
++    const char* he = p;
++    while (*he && *he != '/' && *he != '?' && *he != '#') he++;
++    const char* at = NULL;
++    for (const char* q = p; q < he; q++) if (*q == '@') at = q;
++    if (at) {
++        const char* col = memchr(p, ':', (size_t)(at - p));
++        us = p; usl = (u32)((col ? col : at) - p);
++        if (col) { pw = col + 1; pwl = (u32)(at - col - 1); }
++        p = at + 1;
++    }
++    const char* pc = NULL;
++    for (const char* q = p; q < he; q++) if (*q == ':') pc = q;
++    ho = p; hol = (u32)((pc ? pc : he) - p);
++    if (pc) for (const char* q = pc + 1; q < he && *q >= '0' && *q <= '9'; q++) port = port * 10 + (u32)(*q - '0');
++    if (!port) port = (scl == 5 && !strncmp(sc, "https", 5)) ? 443 : 80;
++    if (*he == '/' || *he == '?') {
++        const char* pe = he;
++        while (*pe && *pe != '#') pe++;
++        pa = he; pal = (u32)(pe - he);
++    }
++    const u32 need = scl + hol + usl + pwl + pal + 5;
++    if (req_ea) vm_write32(req_ea, need);
++    if (!uri_ea || !pool) return CELL_OK;
++    if (pool_size < need) return (s32)CELL_HTTP_UTIL_ERROR_INVALID_PARAM;
++    u32 w = pool;
++    const char* src[5] = { sc, ho, us, pw, pa };
++    const u32  len[5] = { scl, hol, usl, pwl, pal };
++    for (int i = 0; i < 5; i++) {
++        vm_write32(uri_ea + 4u * (u32)i, w);
++        for (u32 k = 0; k < len[i]; k++) vm_write8(w + k, (u8)src[i][k]);
++        vm_write8(w + len[i], 0);
++        w += len[i] + 1;
++    }
++    vm_write32(uri_ea + 20, port);
++    vm_write32(uri_ea + 24, 0);
++    printf("[cellHttpUtil] ParseUri('%s') -> host '%.*s' port %u path '%.*s'\n",
++           url, (int)hol, ho, port, (int)pal, pa);
++    return CELL_OK;
++}
++
+ s32 cellHttpUtilParseUri(CellHttpUtilUri* uri, const char* url,
+                           void* pool, u32 poolSize, u32* required)
+ {
++    if (ps3_ugc_online()) {
++        if (!url) return (s32)CELL_HTTP_UTIL_ERROR_INVALID_PARAM;
++        return ugc_parse_uri((u32)(uintptr_t)uri, (u32)(uintptr_t)url, (u32)(uintptr_t)pool,
++                             poolSize, (u32)(uintptr_t)required);
++    }
+     (void)pool;
+     (void)poolSize;
+     (void)required;
 diff --git a/libs/network/cellNetCtl.c b/libs/network/cellNetCtl.c
-index c7926c0..b95197a 100644
+index c7926c0..0ed5682 100644
 --- a/libs/network/cellNetCtl.c
 +++ b/libs/network/cellNetCtl.c
-@@ -49,6 +49,9 @@ static int netctl_online(void)
+@@ -42,13 +42,172 @@ static int s_netctl_initialized = 0;
+  * their offline path (verified against LBP's working RPCS3 boot, where
+  * GetState never reported a connection). PS3_NET_ONLINE=1 restores the old
+  * fake-connected behaviour for online experiments. */
++int ps3_ugc_online(void);   /* below */
++
+ static int netctl_online(void)
+ {
+     static int v = -1;
+     if (v < 0) v = getenv("PS3_NET_ONLINE") ? 1 : 0;
++    return v || ps3_ugc_online();
++}
++
++/* ---------------------------------------------------------------------------
++ * UGC switches (inFAMOUS 2 / Festival of Blood user-generated content).
++ * All OFF by default; each is read with getenv on first use (never at static
++ * init: the PS5 sets the environment inside main) and applies only when the
++ * title id is one of the two games -- inFAMOUS 1 never sees them.
++ *   PS3_UGC_ONLINE=1            NP signed in + online, cellNetCtl connected,
++ *                               EULA accepted, fake NP ticket, cellHttp SDK
++ *                               shape (libs/network/sceNp.c, cellHttp.c).
++ *   PS3_UGC_NAME=<online id>    the online id then (default "Player").
++ *   PS3_UGC_SERVER=<ipv4>[:port] every name ending in .scea.com or
++ *                               .cloudfront.net (and a bare one-label name)
++ *                               resolves to <ipv4> with no DNS query;
++ *                               connections to it on port 80 go to <port>
++ *                               when one is given.
++ *   PS3_UGC_PLAIN=1             TEST ONLY: https fetched as plain HTTP.
++ * -----------------------------------------------------------------------*/
++extern const char* cellGame_get_title_id(void);   /* libs/system/cellGame.c */
++
++int ps3_ugc_title(void)
++{
++    /* inFAMOUS 2: NPUA80638 (PSN), BCUS98125 (disc, named in
++     * libs/video/rsx_button_icons.c); Festival of Blood: NPUA80657. The id is
++     * read every call until PARAM.SFO has replaced the placeholder. */
++    static int v = -1;
++    if (v >= 0) return v;
++    const char* t = cellGame_get_title_id();
++    if (!t || !t[0] || strcmp(t, "BLES00000") == 0) return 0;
++    v = (!strcmp(t, "NPUA80638") || !strcmp(t, "BCUS98125") || !strcmp(t, "NPUA80657")) ? 1 : 0;
      return v;
  }
  
++int ps3_ugc_online(void)
++{
++    static int e = -1;
++    if (e < 0) { const char* s = getenv("PS3_UGC_ONLINE"); e = (s && s[0] == '1') ? 1 : 0; }
++    return e && ps3_ugc_title();
++}
++
++const char* ps3_ugc_name(void)
++{
++    static char name[17];
++    static int done = 0;
++    if (!done) {
++        const char* s = getenv("PS3_UGC_NAME");
++        size_t n = s ? strlen(s) : 0;
++        int ok = n >= 3 && n <= 16 && ((s[0] >= 'A' && s[0] <= 'Z') || (s[0] >= 'a' && s[0] <= 'z'));
++        for (size_t i = 0; ok && i < n; i++) {
++            char c = s[i];
++            ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
++        }
++        strcpy(name, ok ? s : "Player");
++        done = 1;
++    }
++    return name;
++}
++
++/* PS3_UGC_PLAIN=1 (TEST ONLY, with PS3_UGC_ONLINE): an https URL is fetched
++ * as plain HTTP -- there is no TLS client here, so this is only for a local
++ * fake server; a real server would need TLS. */
++int ps3_ugc_plain(void)
++{
++    static int e = -1;
++    if (e < 0) { const char* s = getenv("PS3_UGC_PLAIN"); e = (s && s[0] == '1') ? 1 : 0; }
++    return e && ps3_ugc_online();
++}
++
++/* PS3_UGC_SERVER: 1 and the address (network order bytes) and port (0 = keep
++ * the game's) when set for this title, else 0. Parsed by hand: no resolver. */
++int ps3_ugc_server(uint8_t ip[4], uint16_t* port)
++{
++    static int st = -1;
++    static uint8_t sip[4];
++    static uint16_t sport;
++    if (st < 0) {
++        const char* s = getenv("PS3_UGC_SERVER");
++        unsigned a[4] = {0}, p = 0; int i = 0, ok = s && *s;
++        for (; ok && i < 4; i++) {
++            if (*s < '0' || *s > '9') { ok = 0; break; }
++            while (*s >= '0' && *s <= '9') a[i] = a[i] * 10 + (unsigned)(*s++ - '0');
++            if (a[i] > 255) ok = 0;
++            if (i < 3) { if (*s == '.') s++; else ok = 0; }
++        }
++        if (ok && *s == ':') {
++            s++;
++            while (*s >= '0' && *s <= '9') p = p * 10 + (unsigned)(*s++ - '0');
++            if (p == 0 || p > 65535) ok = 0;
++        }
++        if (ok && *s) ok = 0;
++        for (i = 0; i < 4; i++) sip[i] = (uint8_t)a[i];
++        sport = (uint16_t)p;
++        st = ok ? 1 : 0;
++        if (getenv("PS3_UGC_SERVER") && !ok)
++            printf("[ugc] PS3_UGC_SERVER='%s' is not <ipv4>[:port]; ignored\n", getenv("PS3_UGC_SERVER"));
++    }
++    if (!st || !ps3_ugc_title()) return 0;
++    if (ip) memcpy(ip, sip, 4);
++    if (port) *port = sport;
++    return 1;
++}
++
++/* The game's transport keeps only the FIRST DNS label of its host (our capture:
++ * it resolves "static.infamous2-release.ps3.online.scea.com" in full via
++ * gethostbyname, then every cellHttp request carries Host "static"). We remember
++ * each full UGC host gethostbyname actually saw, and hand the full name back when
++ * cellHttp later has only the leading label. (Not a cellHttpUtil bug: the only
++ * cellHttpUtil import is ParseUri, and the truncated host is already in the
++ * game's own sprintf output before ParseUri runs.) */
++#define UGC_HOSTMEM 8
++static char s_ugc_hosts[UGC_HOSTMEM][128];
++static int  s_ugc_hostn = 0;
++void ps3_ugc_note_host(const char* full);
++const char* ps3_ugc_full_host(const char* label);
++int ps3_ugc_host_match(const char* host);   /* fwd */
++
++void ps3_ugc_note_host(const char* full)
++{
++    if (!full || !strchr(full, '.') || !ps3_ugc_host_match(full)) return;
++    for (int i = 0; i < s_ugc_hostn; i++) if (!strcmp(s_ugc_hosts[i], full)) return;
++    if (s_ugc_hostn < UGC_HOSTMEM) { strncpy(s_ugc_hosts[s_ugc_hostn], full, 127); s_ugc_hostn++; }
++}
++
++const char* ps3_ugc_full_host(const char* label)
++{
++    if (!label || strchr(label, '.')) return 0;
++    size_t n = strlen(label);
++    for (int i = 0; i < s_ugc_hostn; i++)
++        if (!strncmp(s_ugc_hosts[i], label, n) && s_ugc_hosts[i][n] == '.')
++            return s_ugc_hosts[i];
++    return 0;
++}
++
++/* A name the game resolves that PS3_UGC_SERVER takes over: *.scea.com,
++ * *.cloudfront.net, and a bare one-label name -- inFAMOUS 2 fetches its
++ * config.json from "https://static:443/i2/config.json" (seen 2026-11-13). */
++int ps3_ugc_host_match(const char* host)
++{
++    static const char* const suf[] = { ".scea.com", ".cloudfront.net" };
++    if (!host || !host[0]) return 0;
++    if (!strchr(host, '.') && !strchr(host, ':')) return 1;
++    size_t n = strlen(host);
++    for (size_t k = 0; k < 2; k++) {
++        size_t m = strlen(suf[k]);
++        if (n <= m) continue;
++        size_t i = 0;
++        for (; i < m; i++) {
++            char c = host[n - m + i];
++            if (c >= 'A' && c <= 'Z') c += 32;
++            if (c != suf[k][i]) break;
++        }
++        if (i == m) return 1;
++    }
++    return 0;
++}
++
 +/* For the libraries that answer the same question (cellSysutilNpEula.c). */
 +int ps3_netctl_online(void) { return netctl_online(); }
 +
  typedef struct {
      int              in_use;
      cellNetCtlHandler handler;
-@@ -361,11 +364,19 @@ s32 cellNetCtlNetStartDialogAbortAsync(void)
+@@ -361,11 +520,19 @@ s32 cellNetCtlNetStartDialogAbortAsync(void)
  
  s32 cellNetCtlNetStartDialogUnloadAsync(CellNetCtlNetStartDialogResult* result)
  {
@@ -2589,7 +3568,7 @@ index c5ab148..944812f 100644
  }
  #endif
 diff --git a/libs/network/sceNp.c b/libs/network/sceNp.c
-index 8bb66db..079ef70 100644
+index 8bb66db..8a16665 100644
 --- a/libs/network/sceNp.c
 +++ b/libs/network/sceNp.c
 @@ -9,9 +9,11 @@
@@ -2604,7 +3583,116 @@ index 8bb66db..079ef70 100644
  
  
  /* ---------------------------------------------------------------------------
-@@ -287,6 +289,71 @@ s32 sceNpManagerGetChatRestrictionFlag(s32* isRestricted)
+@@ -40,12 +42,29 @@ const char* np_fake_username(void)
+     return s_fake_username;
+ }
+ 
++/* UGC switches (libs/network/cellNetCtl.c). */
++int         ps3_ugc_online(void);
++const char* ps3_ugc_name(void);
++
++/* The online id the getters hand out: PS3_UGC_NAME under PS3_UGC_ONLINE
++ * (inFAMOUS 2 / FoB only), otherwise the psnr name as before. */
++static const char* np_name(void)
++{
++    return ps3_ugc_online() ? ps3_ugc_name() : np_psnr_online_id();
++}
++
++/* Signed in: a psnr server, or PS3_UGC_ONLINE for the UGC games. */
++static int np_signed_in(void)
++{
++    return np_psnr_enabled() || ps3_ugc_online();
++}
++
+ /* Build a fake NP ID from the current username (PS3_NP_ONLINE_ID wins, so
+  * two instances on one machine can be two players). */
+ static void np_build_fake_id(SceNpId* npId)
+ {
+     memset(npId, 0, sizeof(SceNpId));
+-    strncpy(npId->handle.data, np_psnr_online_id(), SCE_NP_ONLINEID_MAX_LENGTH);
++    strncpy(npId->handle.data, np_name(), SCE_NP_ONLINEID_MAX_LENGTH);
+     npId->handle.term = '\0';
+ }
+ 
+@@ -59,7 +78,7 @@ s32 sceNpInit(u32 poolSize, void* poolPtr)
+     (void)poolPtr;
+ 
+     printf("[sceNp] Init(poolSize=%u, username=\"%s\")\n",
+-           poolSize, np_psnr_online_id());
++           poolSize, np_name());
+ 
+     if (s_np_initialized)
+         return SCE_NP_ERROR_ALREADY_INITIALIZED;
+@@ -94,7 +113,7 @@ s32 sceNpGetNpId(s32 userId, SceNpId* npId)
+      * time it asked for its NP ID online. */
+     npId = GUEST_PTR(npId, SceNpId*);
+     np_build_fake_id(npId);
+-    printf("[sceNp] GetNpId(user=%d) -> \"%s\"\n", userId, np_psnr_online_id());
++    printf("[sceNp] GetNpId(user=%d) -> \"%s\"\n", userId, np_name());
+     return CELL_OK;
+ }
+ 
+@@ -110,10 +129,10 @@ s32 sceNpGetOnlineId(s32 userId, SceNpOnlineId* onlineId)
+         return SCE_NP_ERROR_INVALID_ARGUMENT;
+ 
+     memset(onlineId, 0, sizeof(SceNpOnlineId));
+-    strncpy(onlineId->data, np_psnr_online_id(), SCE_NP_ONLINEID_MAX_LENGTH);
++    strncpy(onlineId->data, np_name(), SCE_NP_ONLINEID_MAX_LENGTH);
+     onlineId->term = '\0';
+ 
+-    printf("[sceNp] GetOnlineId(user=%d) -> \"%s\"\n", userId, np_psnr_online_id());
++    printf("[sceNp] GetOnlineId(user=%d) -> \"%s\"\n", userId, np_name());
+     return CELL_OK;
+ }
+ 
+@@ -129,11 +148,11 @@ s32 sceNpGetOnlineName(s32 userId, SceNpOnlineName* onlineName)
+         return SCE_NP_ERROR_INVALID_ARGUMENT;
+ 
+     memset(onlineName, 0, sizeof(SceNpOnlineName));
+-    strncpy(onlineName->data, np_psnr_online_id(),
++    strncpy(onlineName->data, np_name(),
+             SCE_NP_ONLINENAME_MAX_LENGTH - 1);
+ 
+     printf("[sceNp] GetOnlineName(user=%d) -> \"%s\"\n",
+-           userId, np_psnr_online_id());
++           userId, np_name());
+     return CELL_OK;
+ }
+ 
+@@ -150,12 +169,12 @@ s32 sceNpGetUserProfile(s32 userId, SceNpUserInfo* userInfo)
+ 
+     memset(userInfo, 0, sizeof(SceNpUserInfo));
+     np_build_fake_id(&userInfo->npId);
+-    strncpy(userInfo->onlineName.data, np_psnr_online_id(),
++    strncpy(userInfo->onlineName.data, np_name(),
+             SCE_NP_ONLINENAME_MAX_LENGTH - 1);
+     /* Leave avatar URL empty */
+ 
+     printf("[sceNp] GetUserProfile(user=%d) -> \"%s\"\n",
+-           userId, np_psnr_online_id());
++           userId, np_name());
+     return CELL_OK;
+ }
+ 
+@@ -232,7 +251,7 @@ s32 sceNpManagerGetStatus(s32* status)
+      * writes to whatever host address shares that number. Same trap as
+      * cellGcmSys had. Tokyo Jungle calls this during its online init. */
+     /* Signed in when there is a psnr server to be signed in to. */
+-    s32 st = np_psnr_enabled() ? SCE_NP_MANAGER_STATUS_ONLINE : SCE_NP_MANAGER_STATUS_OFFLINE;
++    s32 st = np_signed_in() ? SCE_NP_MANAGER_STATUS_ONLINE : SCE_NP_MANAGER_STATUS_OFFLINE;
+     vm_write32((uint32_t)(uintptr_t)status, (uint32_t)st);
+     { static s32 last = -2;
+       if (st != last) printf("[sceNp] ManagerGetStatus() -> %s\n", st < 0 ? "OFFLINE" : "ONLINE");
+@@ -249,7 +268,7 @@ s32 sceNpManagerRegisterCallback(SceNpManagerCallback callback, void* arg)
+     printf("[sceNp] ManagerRegisterCallback()\n");
+     /* Online: tell the title it is signed in, as the console does once the
+      * manager reaches ONLINE. Delivered on its next cellSysutilCheckCallback. */
+-    if (np_psnr_enabled() && callback) {
++    if (np_signed_in() && callback) {
+         const u64 args[8] = { (u64)(u32)SCE_NP_MANAGER_STATUS_ONLINE, 0,
+                               (u64)(u32)(uintptr_t)arg, 0, 0, 0, 0, 0 };
+         cellSysutilQueueGuestCallbackArgs((u32)(uintptr_t)callback, args);
+@@ -287,6 +306,209 @@ s32 sceNpManagerGetChatRestrictionFlag(s32* isRestricted)
      return CELL_OK;
  }
  
@@ -2616,12 +3704,104 @@ index 8bb66db..079ef70 100644
 + * at once with a failed GOT_TICKET, and the region and the time are local. */
 +#define SCE_NP_MANAGER_EVENT_GOT_TICKET 255
 +
++/* ---- PS3_UGC_ONLINE: a locally made NP ticket ----------------------------
++ * The public ticket layout (as RPCS3/RPCN and the LittleBigPlanet community
++ * servers parse it), version 2.1:
++ *   u32 0x21010000, u32 size of the rest;
++ *   section 0x3000 (u16 id, u16 len): items, each u16 type + u16 len + data
++ *     (1 u32, 2 u64, 4 string, 7 time = u64 ms since 1970, 8 binary, 0 empty):
++ *     serial(8, 20), issuer id(1), issued(7), expires(7), account id(2),
++ *     online id(4, 32), region(8, 4), domain(4, 4), service id(8, 24),
++ *     status(1), empty, empty;
++ *   section 0x3002: key id(8, 4) = "UGC0", signature(8, 56) = all zero.
++ * The signature is NOT genuine (nobody outside Sony/RPCN holds the key): a
++ * server that verifies ticket signatures rejects this ticket. */
++static u8   s_tk[512];
++static u32  s_tk_len = 0;
++static u64  s_tk_issued = 0, s_tk_expires = 0, s_tk_account = 0;
++static char s_tk_service[25];
++static const u8 s_tk_serial[20] = { 'U','G','C','L','O','C','A','L' };   /* rest zero */
++#define TK_ISSUER 0x00000100u
++
++static u32 tk_item(u8* p, u16 type, const void* data, u16 len)
++{
++    p[0] = (u8)(type >> 8); p[1] = (u8)type; p[2] = (u8)(len >> 8); p[3] = (u8)len;
++    if (len) { if (data) memcpy(p + 4, data, len); else memset(p + 4, 0, len); }
++    return 4u + len;
++}
++static u32 tk_u32(u8* p, u32 v)
++{
++    u8 b[4] = { (u8)(v >> 24), (u8)(v >> 16), (u8)(v >> 8), (u8)v };
++    return tk_item(p, 1, b, 4);
++}
++static u32 tk_u64(u8* p, u16 type, u64 v)
++{
++    u8 b[8];
++    for (int i = 0; i < 8; i++) b[i] = (u8)(v >> (56 - 8 * i));
++    return tk_item(p, type, b, 8);
++}
++
++static void ugc_build_ticket(const char* service)
++{
++    char id[32] = {0}, svc[24] = {0};
++    strncpy(id, np_name(), 16);
++    strncpy(svc, service ? service : "", sizeof svc);
++    memcpy(s_tk_service, svc, 24); s_tk_service[24] = 0;
++    s_tk_issued  = (u64)time(NULL) * 1000ull;
++    s_tk_expires = s_tk_issued + 3600ull * 1000ull;
++    /* A stable account id from the online id (FNV-1a), never 0. */
++    u64 h = 1469598103934665603ull;
++    for (const char* c = id; *c; c++) { h ^= (u8)*c; h *= 1099511628211ull; }
++    s_tk_account = h ? h : 1;
++
++    u8 body[400]; u32 b = 0;
++    b += tk_item(body + b, 8, s_tk_serial, 20);
++    b += tk_u32 (body + b, TK_ISSUER);
++    b += tk_u64 (body + b, 7, s_tk_issued);
++    b += tk_u64 (body + b, 7, s_tk_expires);
++    b += tk_u64 (body + b, 2, s_tk_account);
++    b += tk_item(body + b, 4, id, 32);
++    b += tk_item(body + b, 8, "us\0\0", 4);
++    b += tk_item(body + b, 4, "un\0\0", 4);
++    b += tk_item(body + b, 8, svc, 24);
++    b += tk_u32 (body + b, 0);
++    b += tk_item(body + b, 0, NULL, 0);
++    b += tk_item(body + b, 0, NULL, 0);
++
++    u8 foot[80]; u32 f = 0;
++    f += tk_item(foot + f, 8, "UGC0", 4);
++    f += tk_item(foot + f, 8, NULL, 56);
++
++    u32 n = 8;
++    n += tk_item(s_tk + n, 0x3000, body, (u16)b);
++    n += tk_item(s_tk + n, 0x3002, foot, (u16)f);
++    s_tk[0] = 0x21; s_tk[1] = 0x01; s_tk[2] = 0; s_tk[3] = 0;
++    const u32 rest = n - 8;
++    s_tk[4] = (u8)(rest >> 24); s_tk[5] = (u8)(rest >> 16); s_tk[6] = (u8)(rest >> 8); s_tk[7] = (u8)rest;
++    s_tk_len = n;
++}
++
 +s32 sceNpManagerRequestTicket2(u32 npId, u32 version, u32 serviceId, u32 cookie,
 +                               u32 cookieSize, u32 entitlementId, u32 consumedCount)
 +{
 +    (void)version; (void)cookie; (void)cookieSize; (void)entitlementId; (void)consumedCount;
 +    if (!s_np_initialized) return SCE_NP_ERROR_NOT_INITIALIZED;
 +    if (!npId || !serviceId) return SCE_NP_ERROR_INVALID_ARGUMENT;
++    if (ps3_ugc_online()) {
++        const char* svc = (const char*)(vm_base + serviceId);
++        const u32 vmaj = version ? vm_read16(version) : 0, vmin = version ? vm_read16(version + 2) : 0;
++        ugc_build_ticket(svc);
++        if (s_npmgr_cb) {
++            /* RPCS3: the event's second argument is the ticket size. */
++            const u64 args[8] = { SCE_NP_MANAGER_EVENT_GOT_TICKET, (u64)s_tk_len,
++                                  (u64)(u32)(uintptr_t)s_npmgr_cb_arg, 0, 0, 0, 0, 0 };
++            cellSysutilQueueGuestCallbackArgs((u32)(uintptr_t)s_npmgr_cb, args);
++        }
++        printf("[sceNp] ManagerRequestTicket2(version=%u.%u, service=\"%.24s\", cookieSize=%u) -> "
++               "GOT_TICKET %u bytes (PS3_UGC_ONLINE, fake signature)\n",
++               vmaj, vmin, s_tk_service, cookieSize, s_tk_len);
++        return CELL_OK;
++    }
 +    if (!np_psnr_enabled()) {
 +        printf("[sceNp] ManagerRequestTicket2() -> OFFLINE\n");
 +        return SCE_NP_ERROR_OFFLINE;
@@ -2635,19 +3815,65 @@ index 8bb66db..079ef70 100644
 +    return CELL_OK;
 +}
 +
++/* bufferSize is a guest POINTER to the size (u32): the game passes r4 = a
++ * stack slot and reads it back before its alloc (inFAMOUS 2 0x2BA600). Only
++ * PS3_UGC_ONLINE uses it as one; otherwise the old answer stands. */
 +s32 sceNpManagerGetTicket(u32 buffer, u32 bufferSize)
 +{
-+    (void)buffer;
 +    if (!s_np_initialized) return SCE_NP_ERROR_NOT_INITIALIZED;
 +    if (!bufferSize) return SCE_NP_ERROR_INVALID_ARGUMENT;
++    if (ps3_ugc_online()) {
++        if (!s_tk_len) return SCE_NP_ERROR_INVALID_STATE;   /* none requested yet */
++        if (!buffer) {
++            vm_write32(bufferSize, s_tk_len);
++            printf("[sceNp] ManagerGetTicket(size query) -> %u\n", s_tk_len);
++            return CELL_OK;
++        }
++        const u32 have = vm_read32(bufferSize);
++        if (have < s_tk_len) return SCE_NP_ERROR_INVALID_ARGUMENT;
++        vm_memcpy_to(buffer, s_tk, s_tk_len);
++        vm_write32(bufferSize, s_tk_len);
++        printf("[sceNp] ManagerGetTicket(buf=0x%08X, %u) -> %u bytes\n", buffer, have, s_tk_len);
++        return CELL_OK;
++    }
++    (void)buffer;
 +    return SCE_NP_ERROR_INVALID_STATE;   /* no ticket was ever issued */
 +}
 +
++/* SceNpTicketParam is a 256-byte big-endian union (s32/s64/u32/u64, a date,
++ * or data). Ids: 0 serial, 1 issuer, 2 issued, 3 expires, 4 account id,
++ * 5 online id, 6 region, 7 domain, 8 service id, 9 status, 10 status
++ * duration, 11 date of birth. */
 +s32 sceNpManagerGetTicketParam(s32 paramId, u32 param)
 +{
-+    (void)paramId;
 +    if (!s_np_initialized) return SCE_NP_ERROR_NOT_INITIALIZED;
 +    if (!param) return SCE_NP_ERROR_INVALID_ARGUMENT;
++    if (ps3_ugc_online()) {
++        if (!s_tk_len) return SCE_NP_ERROR_INVALID_STATE;
++        u8 p[256];
++        u64 v = 0; int n = 0;   /* an integer param: n big-endian bytes of v */
++        memset(p, 0, sizeof p);
++        switch (paramId) {
++        case 0:  memcpy(p, s_tk_serial, 20); break;
++        case 1:  v = TK_ISSUER;    n = 4; break;
++        case 2:  v = s_tk_issued;  n = 8; break;
++        case 3:  v = s_tk_expires; n = 8; break;
++        case 4:  v = s_tk_account; n = 8; break;
++        case 5:  strncpy((char*)p, np_name(), 16); break;
++        case 6:  memcpy(p, "us\0\0", 4); break;
++        case 7:  memcpy(p, "un\0\0", 4); break;
++        case 8:  memcpy(p, s_tk_service, 24); break;
++        case 9:  n = 4; break;
++        case 10: n = 8; break;
++        case 11: p[0] = 0x07; p[1] = 0xC6; p[2] = 1; p[3] = 1; break;   /* SceNpDate 1990-01-01 */
++        default: return SCE_NP_ERROR_INVALID_ARGUMENT;
++        }
++        for (int i = 0; i < n; i++) p[i] = (u8)(v >> (8 * (n - 1 - i)));
++        vm_memcpy_to(param, p, sizeof p);
++        printf("[sceNp] ManagerGetTicketParam(%d) -> ok\n", paramId);
++        return CELL_OK;
++    }
++    (void)paramId;
 +    return SCE_NP_ERROR_INVALID_STATE;
 +}
 +
@@ -2655,7 +3881,7 @@ index 8bb66db..079ef70 100644
 +{
 +    if (!s_np_initialized) return SCE_NP_ERROR_NOT_INITIALIZED;
 +    if (!countryCode || !language) return SCE_NP_ERROR_INVALID_ARGUMENT;
-+    if (!np_psnr_enabled()) return SCE_NP_ERROR_OFFLINE;
++    if (!np_signed_in()) return SCE_NP_ERROR_OFFLINE;
 +    vm_write8(countryCode + 0, 'u'); vm_write8(countryCode + 1, 's');   /* SceNpCountryCode */
 +    vm_write8(countryCode + 2, 0);   vm_write8(countryCode + 3, 0);
 +    vm_write32(language, 1);         /* CELL_SYSUTIL_LANG_ENGLISH_US */
@@ -2666,7 +3892,7 @@ index 8bb66db..079ef70 100644
 +{
 +    if (!s_np_initialized) return SCE_NP_ERROR_NOT_INITIALIZED;
 +    if (!pTick) return SCE_NP_ERROR_INVALID_ARGUMENT;
-+    if (!np_psnr_enabled()) return SCE_NP_ERROR_OFFLINE;
++    if (!np_signed_in()) return SCE_NP_ERROR_OFFLINE;
 +    /* CellRtcTick: microseconds since 0001-01-01 00:00 UTC. */
 +    const u64 unix_us = (u64)time(NULL) * 1000000ull;
 +    vm_write64(pTick, unix_us + 62135596800000000ull);
@@ -2676,7 +3902,7 @@ index 8bb66db..079ef70 100644
  /* Score setup is local even while the NP manager is offline. Games may
   * initialize it before starting the worker that decides whether to use PSN. */
  s32 sceNpScoreInit(void)
-@@ -308,3 +375,35 @@ s32 sceNpScoreTerm(void)
+@@ -308,3 +530,35 @@ s32 sceNpScoreTerm(void)
      s_score_initialized = 0;
      return CELL_OK;
  }
@@ -2729,6 +3955,24 @@ index ea160aa..a2318a0 100644
  /* Set the fake PSN username (call before sceNpInit if desired) */
  void sceNpSetFakeUsername(const char* username);
  
+diff --git a/libs/network/sceNpScore.c b/libs/network/sceNpScore.c
+index f9c3c50..89f51de 100644
+--- a/libs/network/sceNpScore.c
++++ b/libs/network/sceNpScore.c
+@@ -355,8 +355,13 @@ static void hle_ranking_by_npid(ppu_context* ctx)
+ 
+ extern void ps3_hle_register_ctx(uint32_t nid, const char* name, void (*fn)(ppu_context*));
+ 
++void cellhttp_ugc_register_ctx(void);   /* cellHttp.c: PS3_UGC_ONLINE (off = the old CELL_OK) */
++
+ void np_score_register_ctx(void)
+ {
++    /* The nine cellHttp imports the generated table never bound ride along
++     * here, the only libs/network hook that runs with the ctx registrations. */
++    cellhttp_ugc_register_ctx();
+     ps3_hle_register_ctx(ps3_compute_nid("sceNpScoreGetRankingByRangeAsync"),
+                          "sceNpScoreGetRankingByRangeAsync", hle_ranking_by_range_async);
+     ps3_hle_register_ctx(ps3_compute_nid("sceNpScoreGetRankingByRange"),
 diff --git a/libs/network/sceNpTrophy.c b/libs/network/sceNpTrophy.c
 index d99e8ac..c66515e 100644
 --- a/libs/network/sceNpTrophy.c
@@ -2904,12 +4148,88 @@ index d99e8ac..c66515e 100644
 +       * Only here, after the ALREADY_UNLOCKED return above: a trophy the save already has never chimes again. */
 +      extern void ps3_audio_chime(void) __attribute__((weak));
 +      static int on = -1;
-+      if (on < 0) { const char* e = getenv("PS3_TROPHY_SOUND"); on = !(e && *e == '0')   /* 2026-11-12: on by default (verified in the mix dump: work/agent_chimerev); PS3_TROPHY_SOUND=0 = off */;
++      if (on < 0) { const char* e = getenv("PS3_TROPHY_SOUND"); on = !(e && *e == '0')   /* 2026-11-12: on by default (verified in the mix dump: chimerev notes); PS3_TROPHY_SOUND=0 = off */;
 +                    printf("[sceNpTrophy] PS3_TROPHY_SOUND: chime %s\n", on ? "on" : "off"); }
 +      if (on && ps3_audio_chime) ps3_audio_chime(); }
  
      /* Check if all non-platinum trophies are unlocked -> platinum */
      if (platinumId) {
+diff --git a/libs/network/sysNet.c b/libs/network/sysNet.c
+index 8be6664..be5356c 100644
+--- a/libs/network/sysNet.c
++++ b/libs/network/sysNet.c
+@@ -57,6 +57,11 @@
+ #include <stdlib.h>
+ 
+ extern void ps3_hle_register_ctx(uint32_t nid, const char* name, void (*fn)(ppu_context*));
++int ps3_ugc_server(uint8_t ip[4], uint16_t* port);   /* cellNetCtl.c: PS3_UGC_SERVER */
++int ps3_ugc_host_match(const char* host);
++void ps3_ugc_note_host(const char* host);   /* remember full UGC host */
++int ps3_ugc_online(void);
++int ugc_dns_resolve(const char* name, uint8_t ip[4]);   /* ugc_dns.c */
+ 
+ #define EA(p) ((uint32_t)(uintptr_t)(p))
+ 
+@@ -519,6 +524,12 @@ int32_t sys_net_bnet_connect(int32_t s, const sys_net_sockaddr* addr, uint32_t a
+         a.sin_port = htons(vm_read16(EA(addr) + 8));
+     }
+ 
++    {   /* PS3_UGC_SERVER with a port: the game's port 80 to it goes there. */
++        uint8_t uip[4]; uint16_t uport;
++        if (ps3_ugc_server(uip, &uport) && uport && ntohs(a.sin_port) == 80 &&
++            !memcmp(&a.sin_addr, uip, 4))
++            a.sin_port = htons(uport);
++    }
+     char ip[16];
+     printf("[sys_net] connect(%d, %s:%u)\n", s, ip_str(&a.sin_addr, ip), ntohs(a.sin_port));
+     if (s_sockets[s].p2p && s_sockets[s].stream) {
+@@ -961,10 +972,46 @@ uint32_t sys_net_bnet_inet_ntoa(uint32_t addr)
+ uint32_t sys_net_bnet_gethostbyname(const char* name)
+ {
+     const char* host = GUEST_PTR(EA(name), const char*);
++    if (host) ps3_ugc_note_host(host);   /* keep the full UGC host (game later truncates it) */
+     uint32_t h = scratch(&s_hostent_ea, HOSTENT_SCRATCH);
+     struct addrinfo hints, *res = NULL;
+     if (!host || !h) return 0;
+ 
++    {   /* PS3_UGC_SERVER (cellNetCtl.c): the UGC host names, no DNS query. */
++        uint8_t uip[4]; uint16_t uport;
++        if (ps3_ugc_server(uip, &uport) && ps3_ugc_host_match(host)) {
++            memset(vm_ptr8(h), 0, HOSTENT_SCRATCH);
++            vm_write32(h + 0,  h + 64);
++            vm_write32(h + 4,  h + 32);
++            vm_write32(h + 8,  SYS_NET_AF_INET);
++            vm_write32(h + 12, 4);
++            vm_write32(h + 16, h + 40);
++            vm_write32(h + 40, h + 48);
++            memcpy(vm_ptr8(h + 48), uip, 4);
++            strncpy((char*)vm_ptr8(h + 64), host, HOSTENT_SCRATCH - 65);
++            printf("[sys_net] gethostbyname('%s') -> %u.%u.%u.%u (PS3_UGC_SERVER, no DNS)\n",
++                   host, uip[0], uip[1], uip[2], uip[3]);
++            return h;
++        }
++    }
++    if (ps3_ugc_online()) {   /* UGC mode: own DNS client, never getaddrinfo (PS5 has none) */
++        uint8_t dip[4];
++        if (ugc_dns_resolve(host, dip) != 0) {
++            printf("[sys_net] gethostbyname('%s') failed (ugc dns)\n", host);
++            if (scratch(&s_h_errno_ea, 4)) vm_write32(s_h_errno_ea, SYS_NET_HOST_NOT_FOUND);
++            return 0;
++        }
++        memset(vm_ptr8(h), 0, HOSTENT_SCRATCH);
++        vm_write32(h + 0,  h + 64);
++        vm_write32(h + 4,  h + 32);
++        vm_write32(h + 8,  SYS_NET_AF_INET);
++        vm_write32(h + 12, 4);
++        vm_write32(h + 16, h + 40);
++        vm_write32(h + 40, h + 48);
++        memcpy(vm_ptr8(h + 48), dip, 4);
++        strncpy((char*)vm_ptr8(h + 64), host, HOSTENT_SCRATCH - 65);
++        return h;
++    }
+     memset(&hints, 0, sizeof(hints));
+     hints.ai_family = AF_INET;
+     if (getaddrinfo(host, NULL, &hints, &res) != 0 || !res) {
 diff --git a/libs/spurs/cellSpurs.c b/libs/spurs/cellSpurs.c
 index ec5712b..bbabc66 100644
 --- a/libs/spurs/cellSpurs.c
@@ -4529,7 +5849,7 @@ index 73b7e71..0774c83 100644
 + * copies (NV3062 on 3 + NV3089 on 6, every frame after the G-buffer pass) leave ALPHA_TEST_ENABLE = 3 (NV3089
 + * SET_OPERATION), ALPHA_FUNC = 0 (CLIP_POINT), ALPHA_REF = CLIP_SIZE, DITHER = 3, BLEND_COLOR = DT_DY, the
 + * DMA_A/B/ZETA contexts, and could leave BLEND_ENABLE/SFACTOR/DFACTOR (OUT_POINT/OUT_SIZE/DS_DX) for any draw the
-+ * title does not re-send them for (real-PS3 capture, work/agent_fold2d). On: a word on subchannel 1..6 reaches
++ * title does not re-send them for (real-PS3 capture, fold2d notes). On: a word on subchannel 1..6 reaches
 + * the 3D register file only when that subchannel is bound (SET_OBJECT, method 0) to the NV4097 object
 + * (0x31337000 in inFAMOUS' libgcm; Twisted Metal / Yakuza bind it off subchannel 0). Before a subchannel's
 + * first SET_OBJECT: 2..6 are the 2D path's (gcm_2d_method), 1 stays 3D (GCM_SUBCH1_2D). Subchannel 0 and the
@@ -6254,7 +7574,7 @@ index 176efc4..4769be9 100644
  /* ---- decoded state getters -------------------------------------------- */
  
 diff --git a/libs/video/rsx_draw_engine.c b/libs/video/rsx_draw_engine.c
-index 9a76e67..f363134 100644
+index 9a76e67..3bdb6fe 100644
 --- a/libs/video/rsx_draw_engine.c
 +++ b/libs/video/rsx_draw_engine.c
 @@ -1,3 +1,8 @@
@@ -6425,7 +7745,7 @@ index 9a76e67..f363134 100644
  typedef struct {
      u32 location, offset;
      u32 w, h;
-@@ -108,18 +234,46 @@ typedef struct {
+@@ -108,18 +234,48 @@ typedef struct {
      int snapshot_valid;
      u32 snapshot_rgba;     /* colour-format (depth bytes) copy, or 0      */
      int snapshot_rgba_valid;
@@ -6458,6 +7778,8 @@ index 9a76e67..f363134 100644
 +    u8 icon_atlas;              /* the button-prompt atlas (rsx_button_icons.c) */
 +    u32 icon_gen;               /* the glyph set it was drawn with */
 +    u32 occ_serial;             /* occ query: s_occ_rep_serial at its last read (a texture over the report area) */
++    u16 lt_idx;                 /* rsx lightning: lightning table row + 1 of this texture (PS3_LIGHTNING_LIVE only), 0 = none */
++    u32 lt_gen;                 /* rsx lightning: the colour generation it was made with */
  } eng_texture;
  
 -typedef struct { u64 key; u32 handle; u8 fixed; } eng_pipeline;
@@ -6473,7 +7795,7 @@ index 9a76e67..f363134 100644
  
  typedef struct { u32 first, count; } eng_batch;
  
-@@ -172,12 +326,485 @@ static struct {
+@@ -172,12 +328,485 @@ static struct {
      const rsx_fp_constant_block* fp_constants;
  } g;
  
@@ -6590,7 +7912,7 @@ index 9a76e67..f363134 100644
 + * the async proxy hands the backend between its worker and the RSX thread under s_mu, which orders their writes --
 + * and any number of readers with their own cursor. A reader copies entries, then re-reads the end: if the writer
 + * may have lapped the first entry it read, the batch is reported lost (seqlock-style). */
-+/* BFX_BEGIN -- t35b: this block up to BFX_END is compiled as is by work/agent_t35fix/harness (bfx_test.c). */
++/* BFX_BEGIN -- t35b: this block up to BFX_END is compiled as is by t35fix notes (bfx_test.c). */
 +/* PS3RECOMP_ENG_FREED_NOTE (t35b: default 0; =1 on): the backend records the frees below and the engine (and the async
 + * proxy's view cache) read that record at their safe points and forget every cached copy / template / light input under
 + * a freed number (eng_bf_drain, with the draw-fast templates). 0 = nothing is recorded or read (the old behaviour).
@@ -6959,7 +8281,7 @@ index 9a76e67..f363134 100644
      eng_batch arr[ENG_MAX_BATCHES];
      u32 n_arr;
      eng_batch idx[ENG_MAX_BATCHES];
-@@ -195,6 +822,9 @@ static struct {
+@@ -195,6 +824,9 @@ static struct {
      u8* verts;
      u64 verts_cap;
      u32 n_verts;
@@ -6969,7 +8291,7 @@ index 9a76e67..f363134 100644
  
      rsx_vertex_layout_plan layout;
      rsx_vertex_fetch_plan fetch_plan;
-@@ -233,6 +863,9 @@ static const u8* eng_guest_ptr(void* user, u32 location, u32 offset,
+@@ -233,6 +865,9 @@ static const u8* eng_guest_ptr(void* user, u32 location, u32 offset,
      return vm_base + ea;
  }
  
@@ -6979,7 +8301,7 @@ index 9a76e67..f363134 100644
  static u64 eng_fnv1a(const void* data, u32 n, u64 hash)
  {
      const u8* p = (const u8*)data;
-@@ -240,6 +873,53 @@ static u64 eng_fnv1a(const void* data, u32 n, u64 hash)
+@@ -240,6 +875,53 @@ static u64 eng_fnv1a(const void* data, u32 n, u64 hash)
      return hash;
  }
  
@@ -7033,7 +8355,7 @@ index 9a76e67..f363134 100644
  /* ---- render state -------------------------------------------------------- */
  
  void rsx_draw_engine_decode_render_state(const rsx_dispatch* rsx,
-@@ -266,10 +946,30 @@ void rsx_draw_engine_decode_render_state(const rsx_dispatch* rsx,
+@@ -266,10 +948,30 @@ void rsx_draw_engine_decode_render_state(const rsx_dispatch* rsx,
      rs->cull_enable = rsx_dsp_reg(rsx, 0x183C) & 1;
      rs->cull_face   = rsx_dsp_reg(rsx, 0x1830);
      rs->front_face  = rsx_dsp_reg(rsx, 0x1834);
@@ -7064,7 +8386,7 @@ index 9a76e67..f363134 100644
      rs->stencil_enable    = rsx_dsp_reg(rsx, M_STENCIL_TEST_ENABLE) & 1;
      rs->stencil_two_sided = rsx_dsp_reg(rsx, M_TWO_SIDED_STENCIL) & 1;
      rs->s_func       = rsx_dsp_reg(rsx, M_STENCIL_FUNC);
-@@ -308,6 +1008,8 @@ u64 rsx_draw_engine_hash_render_state(const rsx_be_render_state* rs, u64 hash)
+@@ -308,6 +1010,8 @@ u64 rsx_draw_engine_hash_render_state(const rsx_be_render_state* rs, u64 hash)
      ENG_HASH_FIELD(cull_face);
      ENG_HASH_FIELD(front_face);
      ENG_HASH_FIELD(color_mask);
@@ -7073,7 +8395,7 @@ index 9a76e67..f363134 100644
      ENG_HASH_FIELD(rt_fp16);
      ENG_HASH_FIELD(stencil_enable);
      ENG_HASH_FIELD(stencil_two_sided);
-@@ -577,18 +1279,22 @@ static u32 eng_surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
+@@ -577,18 +1281,22 @@ static u32 eng_surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
      const u32 handle = g.be->color_target_create(g.be->user, want_fmt,
                                                   want_w, want_h, seed, seed_row);
      if (!handle) return ENG_INVALID;
@@ -7100,7 +8422,7 @@ index 9a76e67..f363134 100644
      return slot;
  }
  
-@@ -606,6 +1312,14 @@ static u32 eng_current_target_set(u32 slots[RSX_BE_MAX_COLOR_TARGETS])
+@@ -606,6 +1314,14 @@ static u32 eng_current_target_set(u32 slots[RSX_BE_MAX_COLOR_TARGETS])
       * A, and the MRT selectors add B, C and D on top of it. */
      const u32 sel = (sf.color_target == CELL_GCM_SURFACE_TARGET_1) ? 1u : 0u;
      const rsx_be_format fmt = eng_surface_format(sf.color_format);
@@ -7115,7 +8437,7 @@ index 9a76e67..f363134 100644
      const u32 first = eng_surface_get(sf.color_location[sel], sf.color_offset[sel],
                                        sf.clip_w, sf.clip_h, fmt);
      if (first == ENG_INVALID) return 0;
-@@ -673,8 +1387,25 @@ static u32 eng_zdepth_get(u32 location, u32 offset, u32 rt_w, u32 rt_h)
+@@ -673,8 +1389,25 @@ static u32 eng_zdepth_get(u32 location, u32 offset, u32 rt_w, u32 rt_h)
      if (!handle)
          return (slot < g.n_zdepths && g.zdepths[slot].handle) ? slot : ENG_INVALID;
  
@@ -7142,7 +8464,7 @@ index 9a76e67..f363134 100644
      z->location = location; z->offset = offset;
      z->w = want_w; z->h = want_h;
      z->handle = handle;
-@@ -682,11 +1413,73 @@ static u32 eng_zdepth_get(u32 location, u32 offset, u32 rt_w, u32 rt_h)
+@@ -682,11 +1415,73 @@ static u32 eng_zdepth_get(u32 location, u32 offset, u32 rt_w, u32 rt_h)
      z->cleared = 0;
      z->had_write = 0;
      z->snapshot_valid = 0;
@@ -7217,7 +8539,7 @@ index 9a76e67..f363134 100644
  /* A depth target read back as a texture, but only once the pass has executed
   * a depth-WRITING draw: a write-enable bit alone does not prove the pass
   * produced a usable depth map, and a clear-only zeta falls through to guest
-@@ -697,8 +1490,19 @@ static u32 eng_zdepth_snapshot(u32 slot)
+@@ -697,8 +1492,19 @@ static u32 eng_zdepth_snapshot(u32 slot)
      if (!z->handle || !z->had_write) return 0;
      if (z->snapshot_valid && z->snapshot) return z->snapshot;
      if (!g.be->depth_snapshot) return 0;
@@ -7237,7 +8559,7 @@ index 9a76e67..f363134 100644
      z->snapshot = tex;
      z->snapshot_valid = 1;
      return tex;
-@@ -710,13 +1514,82 @@ static u32 eng_zdepth_snapshot_rgba8(u32 slot)
+@@ -710,13 +1516,82 @@ static u32 eng_zdepth_snapshot_rgba8(u32 slot)
      if (!z->handle || !z->had_write) return 0;
      if (z->snapshot_rgba_valid && z->snapshot_rgba) return z->snapshot_rgba;
      if (!g.be->depth_snapshot_rgba8) return 0;
@@ -7320,7 +8642,7 @@ index 9a76e67..f363134 100644
  /* ---- textures ------------------------------------------------------------ */
  
  static rsx_be_format eng_texfmt(rsx_texfmt f)
-@@ -750,9 +1623,158 @@ static u32 eng_texture_span(u32 fmt, u32 w, u32 h, u32 levels, u32 pitch, int cu
+@@ -750,9 +1625,158 @@ static u32 eng_texture_span(u32 fmt, u32 w, u32 h, u32 levels, u32 pitch, int cu
      return lv[n - 1].offset + lv[n - 1].tl.face_bytes;
  }
  
@@ -7479,7 +8801,7 @@ index 9a76e67..f363134 100644
  static u64 eng_texture_content_hash(u32 location, u32 offset, u32 span,
                                      int* readable)
  {
-@@ -779,6 +1801,36 @@ static u64 eng_texture_content_hash(u32 location, u32 offset, u32 span,
+@@ -779,6 +1803,36 @@ static u64 eng_texture_content_hash(u32 location, u32 offset, u32 span,
      return hash;
  }
  
@@ -7516,7 +8838,7 @@ index 9a76e67..f363134 100644
  static int eng_staging_reserve(u32 bytes)
  {
      if (g.tex_staging_cap >= bytes) return 1;
-@@ -789,14 +1841,470 @@ static int eng_staging_reserve(u32 bytes)
+@@ -789,14 +1843,473 @@ static int eng_staging_reserve(u32 bytes)
      return 1;
  }
  
@@ -7935,6 +9257,8 @@ index 9a76e67..f363134 100644
 +    }
 +}
 +
++#include "rsx_lightning.inc"   /* rsx lightning: live lightning colour (PS3_LIGHTNING_LIVE=1) */
++
  /* Decode a guest texture out of guest memory and hand every face and level to
   * the backend. Returns the backend handle, or 0. */
  static u32 eng_texture_upload(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
@@ -7944,6 +9268,7 @@ index 9a76e67..f363134 100644
      rsx_tex_level lv[RSX_MAX_TEXTURE_LEVELS];
      const u32 nlv = rsx_texture_mip_chain(fmt, w, h, levels, pitch, lv);
 +    s_upload_atlas = 0;
++    s_upload_lt = 0;   /* rsx lightning */
      if (!nlv || !lv[0].tl.face_bytes) return 0;
 +    /* A volume: every slice of every level decoded and uploaded on its own.
 +     * inFAMOUS 2's occlusion volumes read an 8x8x8 cone LUT; uploaded as its
@@ -7988,7 +9313,7 @@ index 9a76e67..f363134 100644
      const u32 faces = cube ? 6u : 1u;
      const u32 face_stride = cube
          ? rsx_texture_cube_face_stride(fmt, w, h, levels, pitch) : 0u;
-@@ -804,7 +2312,30 @@ static u32 eng_texture_upload(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
+@@ -804,7 +2317,35 @@ static u32 eng_texture_upload(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
      const u8* src = eng_guest_ptr(NULL, location, offset, span);
      if (!src) return 0;
  
@@ -8014,13 +9339,18 @@ index 9a76e67..f363134 100644
 +            }
 +        }
 +    }
++    /* rsx lightning: a lightning texture in the chosen colour (PS3_LIGHTNING_LIVE=1; else s_lt_on is 0 here) */
++    if (__builtin_expect(s_lt_on != 0, 0) && !cube && !s_upload_into && ps3_lightning_live()) {
++        const u32 hnd = eng_lt_upload(location, offset, fmt, w, h, nlv, lv, src, span, remap);
++        if (hnd) return hnd;
++    }
 +
 +    const u32 handle = s_upload_into ? s_upload_into
 +                     : g.be->texture_create(g.be->user, eng_texfmt(lv[0].tl.fmt),
                                              w, h, nlv, faces, remap, fmt);
      if (!handle) return 0;
  
-@@ -813,12 +2344,20 @@ static u32 eng_texture_upload(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
+@@ -813,12 +2354,20 @@ static u32 eng_texture_upload(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
          for (u32 m = 0; m < nlv; m++) {
              const rsx_tex_layout* tl = &lv[m].tl;
              if (!eng_staging_reserve(tl->dst_row_bytes * tl->rows)) {
@@ -8042,7 +9372,7 @@ index 9a76e67..f363134 100644
              g.be->texture_upload(g.be->user, handle, f, m, lv[m].w, lv[m].h,
                                   g.tex_staging, tl->dst_row_bytes, tl->rows);
          }
-@@ -839,10 +2378,11 @@ static u32 eng_texture_upload(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
+@@ -839,10 +2388,11 @@ static u32 eng_texture_upload(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
  #define ENG_TIDX_SIZE (ENG_MAX_TEXTURES * 4u)
  static u32 s_tidx[ENG_TIDX_SIZE];
  static inline u32 eng_tkey(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
@@ -8056,7 +9386,7 @@ index 9a76e67..f363134 100644
      k ^= k >> 33; k *= 0xFF51AFD7ED558CCDull; k ^= k >> 33;
      return (u32)k & (ENG_TIDX_SIZE - 1u);
  }
-@@ -852,53 +2392,202 @@ static void eng_tidx_rebuild(void)
+@@ -852,53 +2402,219 @@ static void eng_tidx_rebuild(void)
      for (u32 i = 0; i < g.n_textures; i++) {
          const eng_texture* e = &g.textures[i];
          u32 p = eng_tkey(e->location, e->offset, e->format, e->width, e->height,
@@ -8078,6 +9408,7 @@ index 9a76e67..f363134 100644
 +                            u32 levels, u32 pitch, int cube, u32 remap, u32 depth)
  {
 -    if (!w || !h || w > ENG_MAX_TEX_DIM || h > ENG_MAX_TEX_DIM) return 0;
+-
 +    const u32 handle = eng_texture_slot_impl(location, offset, fmt, w, h, levels, pitch, cube, remap, depth);
 +    if (!handle) {
 +        static int on = -1; if (on < 0) { const char* e = getenv("PS3RECOMP_ENG_TEXFAIL"); on = e ? atoi(e) : 1; }
@@ -8105,7 +9436,7 @@ index 9a76e67..f363134 100644
 +{
 +    if (!w || !h || w > ENG_MAX_TEX_DIM || h > ENG_MAX_TEX_DIM) return 0;
 +    if (!depth) depth = 1;
- 
++
      /* The span (a mip-chain walk) is kept with the entry: the key holds
       * everything it depends on except the level count, which is checked. */
 -    for (u32 p = eng_tkey(location, offset, fmt, w, h, pitch, remap, (u32)(cube != 0));
@@ -8227,6 +9558,7 @@ index 9a76e67..f363134 100644
                      e->content_hash = hash;
 +                    e->icon_atlas = (u8)s_upload_atlas;
 +                    e->icon_gen = s_icon_gen;
++                    e->lt_idx = (u16)s_upload_lt; e->lt_gen = s_upload_lt_gen;   /* rsx lightning */
 +                    if (ths) { e->th_prob_until = g.frames + s_ths_frames + 1u; s_ths_prob_up++; }   /* eng texhash safe */
 +                }
 +                if (eng_th_dyn_on()) {   /* eng texhash dyn: the second change within the window = streamed */
@@ -8255,11 +9587,27 @@ index 9a76e67..f363134 100644
 +                s_upload_into = old;
 +                fresh = eng_texture_upload(location, offset, fmt, w, h, levels, pitch, cube, remap, depth);
 +                s_upload_into = 0;
-             }
++            }
 +            e->icon_gen = s_icon_gen;   /* (failing both ways: given up until the next change) */
++            e->lt_idx = (u16)s_upload_lt; e->lt_gen = s_upload_lt_gen;   /* rsx lightning */
 +            { static int on = -1; if (on < 0) on = getenv("PS3RECOMP_ENG_TEXLOG") ? 1 : 0;
 +              if (on) fprintf(stderr, "[rsx texlog] button atlas h%u -> h%u redrawn%s (loc %u off 0x%08X, glyph set %u, atlas %d)\n",
 +                              old, fresh, fresh == old ? " in place" : "", location, offset, s_icon_gen, s_upload_atlas); }
++        }
++        /* rsx lightning: the colour changed since this lightning texture was made: made again, a few a frame
++         * (lt_idx is only ever set with PS3_LIGHTNING_LIVE=1). */
++        if (__builtin_expect(e->lt_idx != 0, 0) && e->handle) {
++            if (e->lt_gen != __atomic_load_n(&g_ps3_lt_gen, __ATOMIC_ACQUIRE) && eng_lt_entry((int)e->lt_idx - 1)->cls == 'W')
++                e->lt_gen = __atomic_load_n(&g_ps3_lt_gen, __ATOMIC_ACQUIRE);   /* lt2: a class W texture is never recoloured: nothing to re-make */
++            else if (e->lt_gen != __atomic_load_n(&g_ps3_lt_gen, __ATOMIC_ACQUIRE) && eng_lt_budget()) {
++                const u32 fresh = eng_texture_upload(location, offset, fmt, w, h, levels, pitch, cube, remap, depth);
++                if (fresh) { const u32 ei = (u32)(e - g.textures);   /* as the prompt atlas (eng texguard) */
++                             if (fresh != e->handle) { eng_tg_new(fresh, ei, "a lightning colour"); eng_tc_release(e->handle, ei); }
++                             e->handle = fresh; eng_own_set(fresh, ei);
++                             e->lt_idx = (u16)s_upload_lt; e->lt_gen = s_upload_lt_gen; }   /* (0: no longer a lightning texture) */
++                else e->lt_gen = __atomic_load_n(&g_ps3_lt_gen, __ATOMIC_ACQUIRE);   /* (none to be had: given up until the next change) */
+             }
++            eng_lt_tick();
          }
          e->last_use_serial = ++g.texture_use_serial;
          return e->handle;
@@ -8271,7 +9619,7 @@ index 9a76e67..f363134 100644
      if (!span) return 0;
  
      u32 index;
-@@ -917,16 +2606,31 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
+@@ -917,16 +2633,32 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
      memset(&e, 0, sizeof(e));
      e.location = location; e.offset = offset; e.format = fmt;
      e.width = w; e.height = h; e.pitch = pitch;
@@ -8295,6 +9643,7 @@ index 9a76e67..f363134 100644
 +                                  cube, remap, depth);
 +    e.icon_atlas = (u8)s_upload_atlas;
 +    e.icon_gen = s_icon_gen;
++    e.lt_idx = (u16)s_upload_lt; e.lt_gen = s_upload_lt_gen;   /* rsx lightning */
 +    if (ft_u0) ps3_ft_span(PS3_FT_TEXUP, 0, span >> 10, evicted ? 2u : 0u, ft_u0, ps3_ft_now());
 +    /* PS3RECOMP_ENG_TEXLOG=1: one line per texture the engine creates (guest
 +     * location/offset, format byte, size, levels, pitch, cube, crossbar) and
@@ -8308,7 +9657,7 @@ index 9a76e67..f363134 100644
      return e.handle;
  }
  
-@@ -936,6 +2640,27 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
+@@ -936,6 +2668,27 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
   * max LOD at [18:7] and min LOD at [30:19], both 4.8 fixed point. RSX's LOD
   * bias, SET_TEXTURE_FILTER [12:0], is not applied: the reference engine
   * leaves it at zero too. */
@@ -8336,7 +9685,7 @@ index 9a76e67..f363134 100644
  static void eng_decode_sampler(u32 filter, u32 wrap, u32 control0,
                                 rsx_be_sampler_desc* out)
  {
-@@ -967,17 +2692,40 @@ static u32 eng_vtex_mask(void)
+@@ -967,17 +2720,40 @@ static u32 eng_vtex_mask(void)
      return mask;
  }
  
@@ -8381,7 +9730,7 @@ index 9a76e67..f363134 100644
              mask |= 1u << u;
      }
      return mask;
-@@ -994,7 +2742,27 @@ static u32 eng_cube_mask(void)
+@@ -994,7 +2770,27 @@ static u32 eng_cube_mask(void)
   * same address) recomputes it. An identical prefix up to the stored size also
   * means an identical size, since the size is found by scanning those bytes
   * for the end flag. */
@@ -8410,7 +9759,7 @@ index 9a76e67..f363134 100644
  
  typedef struct {
      u32 start, instrs;          /* instrs == 0: unused entry */
-@@ -1011,7 +2779,14 @@ typedef struct {
+@@ -1011,7 +2807,14 @@ typedef struct {
      u64 structural;             /* rsx_fp_structural_hash; 0 = will not hash */
      int constants_ok;
      u32 tex_mask;               /* rsx_fp_texture_mask */
@@ -8425,7 +9774,7 @@ index 9a76e67..f363134 100644
      u8* bytes;
      rsx_fp_constant_block constants;
  } eng_fp_memo;
-@@ -1020,39 +2795,128 @@ static eng_vp_memo s_vp_memo[ENG_PROG_MEMO];
+@@ -1020,39 +2823,128 @@ static eng_vp_memo s_vp_memo[ENG_PROG_MEMO];
  static eng_fp_memo s_fp_memo[ENG_PROG_MEMO];
  static u32 s_memo_clock;
  static u64 ds_memo_hit[2], ds_memo_miss[2];     /* drawstats: vp, fp */
@@ -8559,7 +9908,7 @@ index 9a76e67..f363134 100644
      m->hash = eng_fnv1a(uc, instrs * 16u, 1469598103934665603ull);
  
      m->input_mask = 0xFFFFu;
-@@ -1081,12 +2945,13 @@ static const eng_fp_memo* eng_fp_current(void)
+@@ -1081,12 +2973,13 @@ static const eng_fp_memo* eng_fp_current(void)
      if (!rsx_dsp_reg(&g.rsx, 0x08E4)) return NULL;
      u32 loc = 0;
      const u32 off = rsx_dsp_fragment_program(&g.rsx, &loc);
@@ -8576,7 +9925,7 @@ index 9a76e67..f363134 100644
              ds_memo_hit[1]++;
              return m;
          }
-@@ -1098,8 +2963,8 @@ static const eng_fp_memo* eng_fp_current(void)
+@@ -1098,8 +2991,8 @@ static const eng_fp_memo* eng_fp_current(void)
      if (!uc || !size) return NULL;
  
      u32 v = 0;
@@ -8587,7 +9936,7 @@ index 9a76e67..f363134 100644
      eng_fp_memo* m = &s_fp_memo[v];
      u8* copy = (u8*)realloc(m->bytes, size);
      if (!copy) return NULL;
-@@ -1109,10 +2974,16 @@ static const eng_fp_memo* eng_fp_current(void)
+@@ -1109,10 +3002,16 @@ static const eng_fp_memo* eng_fp_current(void)
      m->off = off;
      m->size = size;
      m->used = ++s_memo_clock;
@@ -8604,7 +9953,7 @@ index 9a76e67..f363134 100644
      return m;
  }
  
-@@ -1120,15 +2991,35 @@ static const eng_fp_memo* eng_fp_current(void)
+@@ -1120,15 +3019,35 @@ static const eng_fp_memo* eng_fp_current(void)
   * layout and by the pipeline, because they must not disagree: the built-in
   * program declares all sixteen inputs, so narrowing the layout for it would
   * leave the pipeline's vertex descriptor short of what the shader reads. */
@@ -8642,7 +9991,7 @@ index 9a76e67..f363134 100644
  /* The layout the active vertex program actually reads. An uncertain analysis
   * falls back to all sixteen registers (rsx_live_draw.c:3625-3643). */
  static void eng_vertex_layout(rsx_vertex_layout_plan* layout)
-@@ -1172,6 +3063,7 @@ static const char* const kEngFixedVS =
+@@ -1172,6 +3091,7 @@ static const char* const kEngFixedVS =
  "    float4 fog:FOG;\n"
  "    float4 t0:TEXCOORD0; float4 t1:TEXCOORD1; float4 t2:TEXCOORD2; float4 t3:TEXCOORD3;\n"
  "    float4 t4:TEXCOORD4; float4 t5:TEXCOORD5; float4 t6:TEXCOORD6; float4 t7:TEXCOORD7;\n"
@@ -8650,7 +9999,7 @@ index 9a76e67..f363134 100644
  "};\n"
  "cbuffer VPConst : register(b0) {\n"
  "    float4 vp_c[512];\n"
-@@ -1189,6 +3081,7 @@ static const char* const kEngFixedVS =
+@@ -1189,6 +3109,7 @@ static const char* const kEngFixedVS =
  "    Out.col0 = input.a3; Out.col1 = float4(0,0,0,1); Out.fog = (float4)0;\n"
  "    Out.t0 = input.a8; Out.t1 = (float4)0; Out.t2 = (float4)0; Out.t3 = (float4)0;\n"
  "    Out.t4 = (float4)0; Out.t5 = (float4)0; Out.t6 = (float4)0; Out.t7 = (float4)0;\n"
@@ -8658,7 +10007,7 @@ index 9a76e67..f363134 100644
  "    return Out;\n"
  "}\n";
  
-@@ -1201,6 +3094,32 @@ static const char* const kEngFixedPS =
+@@ -1201,6 +3122,32 @@ static const char* const kEngFixedPS =
  "};\n"
  "float4 main(PSInput input) : SV_TARGET { return input.col0; }\n";
  
@@ -8691,7 +10040,7 @@ index 9a76e67..f363134 100644
  /* Drawstats split of eng_pipeline_get (defined with the rest of drawstats
   * below): programs + FP constants, key hashing, table scan. */
  static u64 ds_pk_ns[3], ds_pk_scanned;
-@@ -1225,8 +3144,89 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1225,8 +3172,89 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      const u32 vp_instrs = fixed ? 0 : vp->instrs, fp_size = fixed ? 0 : fp->size;
  
      const u32 fp_ctrl  = rsx_dsp_shader_control(&g.rsx);
@@ -8782,7 +10131,7 @@ index 9a76e67..f363134 100644
  
      static const rsx_fp_constant_block no_constants;
      g.fp_constants = fixed ? &no_constants : &fp->constants;
-@@ -1246,20 +3246,47 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1246,20 +3274,47 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      static struct {
          int valid, fixed;
          u64 vp_hash, fp_struct;
@@ -8834,7 +10183,7 @@ index 9a76e67..f363134 100644
          key = kmemo.key;
          goto key_done;
      }
-@@ -1271,8 +3298,23 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1271,8 +3326,23 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
          key = eng_fnv1a(&vp->hash, sizeof vp->hash, key);
          key = eng_fnv1a(&fp->structural, sizeof fp->structural, key);
          key = eng_fnv1a(&fp_ctrl_key, sizeof fp_ctrl_key, key);
@@ -8858,7 +10207,7 @@ index 9a76e67..f363134 100644
      }
      key = eng_fnv1a(&layout->mask, sizeof layout->mask, key);
      key = eng_fnv1a(&layout->stride, sizeof layout->stride, key);
-@@ -1282,9 +3324,14 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
+@@ -1282,9 +3352,14 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
      key = eng_fnv1a(&rt_count, sizeof rt_count, key);
      key = rsx_draw_engine_hash_render_state(rs, key);
      kmemo.valid = 1; kmemo.fixed = fixed; kmemo.vp_hash = in_vp; kmemo.fp_struct = in_fp;
@@ -8874,7 +10223,7 @@ index 9a76e67..f363134 100644
      kmemo.key = key;
  key_done:;
  
-@@ -1297,6 +3344,7 @@ key_done:;
+@@ -1297,6 +3372,7 @@ key_done:;
          if (i < g.n_pipelines && g.pipelines[i].key == key) {
              last_hit = i;
              *out_fixed = g.pipelines[i].fixed;
@@ -8882,7 +10231,7 @@ index 9a76e67..f363134 100644
              if (pk0) {
                  const u64 pk3 = eng_ds_now();
                  ds_pk_ns[0] += pk1 - pk0; ds_pk_ns[1] += pk2 - pk1; ds_pk_ns[2] += pk3 - pk2;
-@@ -1307,6 +3355,11 @@ key_done:;
+@@ -1307,6 +3383,11 @@ key_done:;
      }
      if (g.n_pipelines >= ENG_MAX_PIPELINES) return 0;
  
@@ -8894,7 +10243,7 @@ index 9a76e67..f363134 100644
      u32 handle = 0;
      int vi = 1, fi = 1;
      u32 nconst = 0;
-@@ -1317,17 +3370,98 @@ key_done:;
+@@ -1317,17 +3398,98 @@ key_done:;
          vi = rsx_vp_decompile_compact_ex(vp_uc, vp_instrs * 16u, vtex_mask,
                                           layout->mask, s_vs_hlsl,
                                           sizeof s_vs_hlsl);
@@ -8933,7 +10282,7 @@ index 9a76e67..f363134 100644
 +                fprintf(stderr, "[rsx engine] depth bounds NOT applied to fp %016llx (unexpected text)\n",
 +                        (unsigned long long)in_fp);
 +        }
-+    }
+     }
 +    /* PS3RECOMP_ENG_FP_PATCH=<fp hash>:<from>:<to>[;<fp hash>:<from>:<to>...]:
 +     * DIAGNOSTIC. Replace every <from> with <to> in that fragment program's
 +     * generated HLSL before it is compiled -- a hypothesis about one program's
@@ -8963,7 +10312,7 @@ index 9a76e67..f363134 100644
 +        memcpy(fbf_orig, s_ps_hlsl, strlen(s_ps_hlsl) + 1);
 +        if (rsx_fp_apply_fbfetch(s_ps_hlsl, sizeof s_ps_hlsl, s_fbf.cand, s_fbf.att, s_fbf.sel, &fbf_applied) < 0)
 +            fbf_applied = 0;
-     }
++    }
 +    sp_fp = ps3_ft_now();
 +    if (sp_vp == sp0) sp_vp = sp_fp;   /* the fixed-function pair: no decompile */
      if (vi > 0 && fi > 0)
@@ -8995,7 +10344,7 @@ index 9a76e67..f363134 100644
      /* PS3RECOMP_ENG_SHADER_DUMP=<dir>: each new pipeline's shaders, named by
       * the backend handle the Metal pass log prints as p=. */
      if (handle) { static const char* dir = (const char*)-1;
-@@ -1336,7 +3470,24 @@ key_done:;
+@@ -1336,7 +3498,24 @@ key_done:;
              snprintf(path, sizeof path, "%s/p%u_vs.hlsl", dir, handle);
              FILE* f = fopen(path, "w"); if (f) { fputs(s_vs_hlsl, f); fclose(f); }
              snprintf(path, sizeof path, "%s/p%u_ps.hlsl", dir, handle);
@@ -9021,7 +10370,7 @@ index 9a76e67..f363134 100644
      { static u32 logs = 0; if (__atomic_fetch_add(&logs, 1, __ATOMIC_RELAXED) < 32)
          fprintf(stderr, "[rsx engine] pipeline %016llx: %s vp %d, fp %d,"
                          " %u constants -> %s\n",
-@@ -1346,6 +3497,7 @@ key_done:;
+@@ -1346,6 +3525,7 @@ key_done:;
      g.pipelines[g.n_pipelines].key = key;
      g.pipelines[g.n_pipelines].handle = handle;
      g.pipelines[g.n_pipelines].fixed = (u8)fixed;
@@ -9029,7 +10378,7 @@ index 9a76e67..f363134 100644
      g.n_pipelines++;
      *out_fixed = fixed;
      return handle;
-@@ -1399,9 +3551,12 @@ static void dc_reset(void)
+@@ -1399,9 +3579,12 @@ static void dc_reset(void)
      dc.n_arr = dc.n_idx = dc.n_packets = 0;
      dc.n_refs = dc.n_source_refs = dc.n_verts = dc.n_cuts = 0;
      dc.refs_remapped = 0;
@@ -9042,7 +10391,7 @@ index 9a76e67..f363134 100644
  }
  
  static int dc_reserve_refs(u64 need)
-@@ -1468,10 +3623,11 @@ typedef struct {
+@@ -1468,10 +3651,11 @@ typedef struct {
  } eng_drawstats;
  static eng_drawstats ds;
  static int ds_on = -1;
@@ -9055,7 +10404,7 @@ index 9a76e67..f363134 100644
  }
  static u64 eng_ds_now(void)
  {
-@@ -1482,8 +3638,9 @@ static u64 eng_ds_now(void)
+@@ -1482,8 +3666,9 @@ static u64 eng_ds_now(void)
  static void eng_ds_frame_end(u32 frame_draws)
  {
      static u32 wf;
@@ -9066,7 +10415,7 @@ index 9a76e67..f363134 100644
      if (wf++ % 30 == 0 && ds.draws) {
          const double us = 1e-3;
          fprintf(stderr,
-@@ -1511,6 +3668,15 @@ static void eng_ds_frame_end(u32 frame_draws)
+@@ -1511,6 +3696,15 @@ static void eng_ds_frame_end(u32 frame_draws)
                  ds.draws ? (double)ds_pk_scanned / ds.draws : 0.0, g.n_pipelines,
                  (unsigned long long)ds_memo_hit[0], (unsigned long long)(ds_memo_hit[0] + ds_memo_miss[0]),
                  (unsigned long long)ds_memo_hit[1], (unsigned long long)(ds_memo_hit[1] + ds_memo_miss[1]));
@@ -9082,7 +10431,7 @@ index 9a76e67..f363134 100644
                  if (ds.span_draws)
              fprintf(stderr, "[drawstats] index ranges: %llu draws, span %.0f vs unique %.0f vertices"
                      " (%.2fx), refs %.0f; %llu draws (%.0f%%) dense (span <= 1.25 x unique)\n",
-@@ -1524,22 +3690,579 @@ static void eng_ds_frame_end(u32 frame_draws)
+@@ -1524,22 +3718,579 @@ static void eng_ds_frame_end(u32 frame_draws)
                                              (unsigned long long)ds.fmt[t][z]);
          fprintf(stderr, "%s\n", line);
      }
@@ -9664,7 +11013,7 @@ index 9a76e67..f363134 100644
          const u32 base_index = rsx_dsp_vertex_data_base_index(&g.rsx);
          rsx_dsp_index_array ia;
          rsx_dsp_get_index_array(&g.rsx, &ia);
-@@ -1586,13 +4309,24 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
+@@ -1586,13 +4337,24 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
          }
      }
      if (!dc.fetch_ok) return;
@@ -9690,7 +11039,7 @@ index 9a76e67..f363134 100644
          u32 unique = dc.n_refs;
          /* Drawstats: how dense each draw's index range is -- the span from its
           * lowest to highest vertex against the unique vertices it uses. A
-@@ -1616,6 +4350,7 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
+@@ -1616,6 +4378,7 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
          if (!dedup && rsx_vertex_remap_build_range(&dc.ref_remap, dc.refs, dc.n_refs, &ranged)) {
              dc.refs_remapped = 1;
              dc.n_refs = ranged;
@@ -9698,7 +11047,7 @@ index 9a76e67..f363134 100644
          } else if (rsx_vertex_remap_build(&dc.ref_remap, dc.refs, dc.n_refs, &unique)) {
              if (dso && span_same_base) {
                  const u64 span = (u64)span_hi - span_lo + 1u;
-@@ -1628,13 +4363,50 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
+@@ -1628,13 +4391,50 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
          }
      }
  
@@ -9751,7 +11100,7 @@ index 9a76e67..f363134 100644
          dc.fetch_ok = 0;
          return;
      }
-@@ -1646,6 +4418,7 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
+@@ -1646,6 +4446,7 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
          return;
      }
      dc.n_verts = dc.n_refs;
@@ -9759,7 +11108,7 @@ index 9a76e67..f363134 100644
      if (dso) {
          ds.ns_fetch += eng_ds_now() - t0;
          ds.refs += dc.n_source_refs;
-@@ -1681,16 +4454,66 @@ static void eng_vplog(const rsx_dispatch* r)
+@@ -1681,16 +4482,66 @@ static void eng_vplog(const rsx_dispatch* r)
              vp.scale[0], vp.scale[1], vp.translate[0], vp.translate[1], vp.w, vp.h, vp.x, vp.y, win, coff, clip);
  }
  
@@ -9826,7 +11175,7 @@ index 9a76e67..f363134 100644
      dc.n_packets++;
      if (dc.n_arr >= ENG_MAX_BATCHES) return;
      dc.arr[dc.n_arr].first = first;
-@@ -1707,11 +4530,16 @@ static void sink_inline_array(void* user, const rsx_dispatch* r,
+@@ -1707,11 +4558,16 @@ static void sink_inline_array(void* user, const rsx_dispatch* r,
      (void)user;
      const u32 stride = rsx_vertex_inline_layout(r, NULL);
      if (!stride || bytes < stride) {
@@ -9845,7 +11194,7 @@ index 9a76e67..f363134 100644
      dc.inl = data;
      dc.inl_bytes = bytes;
      dc.n_packets++;
-@@ -1726,6 +4554,7 @@ static void eng_constlog_draw(u32 rt, u32 cw, u32 ch, u32 n, int indexed);
+@@ -1726,6 +4582,7 @@ static void eng_constlog_draw(u32 rt, u32 cw, u32 ch, u32 n, int indexed);
  static void sink_draw_index(void* user, const rsx_dispatch* r, u32 first, u32 count)
  {
      (void)user; (void)r;
@@ -9853,18 +11202,26 @@ index 9a76e67..f363134 100644
      dc.n_packets++;
      if (dc.n_idx >= ENG_MAX_BATCHES) return;
      dc.idx[dc.n_idx].first = first;
-@@ -1742,6 +4571,295 @@ static void sink_draw_index(void* user, const rsx_dispatch* r, u32 first, u32 co
+@@ -1742,70 +4599,675 @@ static void sink_draw_index(void* user, const rsx_dispatch* r, u32 first, u32 co
  /* Texture units the current guest fragment program samples: a unit can stay
   * enabled with a stale binding (a shadow pass keeps its own map bound), and a
   * snapshot is only worth taking for one the program reads. */
+-static u32 eng_fp_tex_mask(void)
 +/* PS3RECOMP_ENG_BIND_UNREAD=1 binds every enabled unit again, read or not (A/B). */
 +static int eng_bind_unread(void)
-+{
+ {
+-    const eng_fp_memo* fp = NULL;
+-    if (!eng_guest_programs(NULL, &fp)) return 0xFFFFu;
+-    return fp->tex_mask;
 +    static int on = -1;
 +    if (on < 0) on = getenv("PS3RECOMP_ENG_BIND_UNREAD") ? 1 : 0;
 +    return on;
-+}
-+
+ }
+ 
+-static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+-                              u32 current_zslot,
+-                              u32 textures[RSX_BE_MAX_TEXTURES],
+-                              rsx_be_sampler_desc samplers[RSX_BE_MAX_TEXTURES])
 +/* ---- GPU light pass (PS3RECOMP_ENG_GPU_LIGHT=<diffuse off>:<specular off>) ----
 + * inFAMOUS 2 lights its frame on the SPUs: the RSX blits the normals target and
 + * the depth buffer into two main-memory buffers, an SPU job turns them into
@@ -9887,7 +11244,14 @@ index 9a76e67..f363134 100644
 +static pthread_mutex_t s_gl_lock = PTHREAD_MUTEX_INITIALIZER;
 +
 +static int eng_gpu_light_on(void)
-+{
+ {
+-    u32 mask = 0;
+-    for (u32 u = 0; u < RSX_BE_MAX_TEXTURES; u++) {
+-        rsx_dsp_texture t;
+-        rsx_dsp_get_texture(&g.rsx, u, &t);
+-        if (!t.enabled) continue;
+-        mask |= 1u << u;
+-        eng_decode_sampler(t.filter, t.wrap, t.control0, &samplers[u]);
 +    if (s_gl.on < 0) {
 +        const char* e = getenv("PS3RECOMP_ENG_GPU_LIGHT");
 +        s_gl.on = 0;
@@ -9900,7 +11264,12 @@ index 9a76e67..f363134 100644
 +    }
 +    return s_gl.on && g.be && g.be->light_pass && g.be->color_snapshot && g.be->depth_snapshot;
 +}
-+
+ 
+-        /* Several targets can share an address (one per size/format). Take
+-         * the one whose size matches the texture, else the newest; never one
+-         * this draw writes -- reading a target a pass is writing is undefined
+-         * on every API, and an MRT set writes more than one of them. */
+-        int sampled = -1, own_hit = 0, own_slot = -1;
 +static float eng_half(const u8* p)
 +{
 +    const u32 h = ((u32)p[0] << 8) | p[1];
@@ -9981,7 +11350,16 @@ index 9a76e67..f363134 100644
 +    if (!is_n && !is_z) return 0;
 +    if (is_n && dst_offset == s_gl.diff_off) {
 +        u32 best = ENG_INVALID;
-+        for (u32 i = 0; i < g.n_surfaces; i++) {
+         for (u32 i = 0; i < g.n_surfaces; i++) {
+-            if (!g.surfaces[i].handle || g.surfaces[i].location != t.location ||
+-                g.surfaces[i].offset != t.offset)
+-                continue;
+-            int own = 0;
+-            for (u32 k = 0; k < n_targets; k++) if (target_slots[k] == i) own = 1;
+-            if (own) {
+-                own_hit = 1;
+-                if (g.surfaces[i].w == t.width && g.surfaces[i].h == t.height) own_slot = (int)i;
+-                continue;
 +            const eng_surface* sf = &g.surfaces[i];
 +            if (!sf->handle || sf->location != location || sf->fmt != RSX_BE_FMT_R8G8B8A8) continue;
 +            const u32 row = pitch ? pitch : sf->w * 4u;
@@ -10024,11 +11402,17 @@ index 9a76e67..f363134 100644
 +            if (s_gl.z_tex && s_gl.z_tex != snap) {
 +                if (eng_zcopy_keep()) s_tg_zcopy++;   /* tg rebase: a backend-owned depth copy (s_dsnap) */
 +                else eng_tg_release(s_gl.z_tex, "GPU-light depth-copy");   /* eng texguard */
-+            }
+             }
+-            const int fits = g.surfaces[i].w == t.width && g.surfaces[i].h == t.height;
+-            if (sampled < 0) { sampled = (int)i; continue; }
+-            const int best_fits = g.surfaces[sampled].w == t.width && g.surfaces[sampled].h == t.height;
+-            if (fits > best_fits || (fits == best_fits && g.surfaces[i].stamp > g.surfaces[sampled].stamp))
+-                sampled = (int)i;
 +            { static unsigned same; if (s_gl.z_tex == snap && same++ < 4) fprintf(stderr, "[gpu light] depth copy is last frame's handle (%u): kept\n", snap); }
 +            s_gl.z_tex = snap; s_gl.z_src = z->handle;   /* tg rebase: z_src */
 +            s_gl.have |= 2u;
-+        }
+         }
+-        if (own_hit && sampled >= 0 && !(g.surfaces[sampled].w == t.width && g.surfaces[sampled].h == t.height))
 +    }
 +    if (s_gl.have == 3u) { s_gl.have = 0; s_gl.in_seq++; }
 +    /* The copies are read by more than the light job (the SSAO job reads all
@@ -10146,30 +11530,19 @@ index 9a76e67..f363134 100644
 +    return view ? view : tex;
 +}
 +
- static u32 eng_fp_tex_mask(void)
- {
-     const eng_fp_memo* fp = NULL;
-@@ -1749,20 +4867,295 @@ static u32 eng_fp_tex_mask(void)
-     return fp->tex_mask;
- }
- 
--static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
--                              u32 current_zslot,
--                              u32 textures[RSX_BE_MAX_TEXTURES],
--                              rsx_be_sampler_desc samplers[RSX_BE_MAX_TEXTURES])
++static u32 eng_fp_tex_mask(void)
++{
++    const eng_fp_memo* fp = NULL;
++    if (!eng_guest_programs(NULL, &fp)) return 0xFFFFu;
++    return fp->tex_mask;
++}
++
 +/* PS3RECOMP_ENG_FBFETCH: is unit u (sampling the draw's own target
 + * target_slots[k] == own_slot) one the pipeline may read from attachment k?
 + * Records it in s_fbf and returns 1 (the unit stays unbound for now). */
 +static int eng_fbf_candidate(u32 u, const rsx_dsp_texture* t, const u32* target_slots,
 +                             u32 n_targets, u32 own_slot)
- {
--    u32 mask = 0;
--    for (u32 u = 0; u < RSX_BE_MAX_TEXTURES; u++) {
--        rsx_dsp_texture t;
--        rsx_dsp_get_texture(&g.rsx, u, &t);
--        if (!t.enabled) continue;
--        mask |= 1u << u;
--        eng_decode_sampler(t.filter, t.wrap, t.control0, &samplers[u]);
++{
 +    int mode = __atomic_load_n(&s_fbf_mode, __ATOMIC_RELAXED);
 +    { static int watched; if (!watched) { watched = 1; ps3_toggle_watch(PS3T_ENG_FBFETCH, eng_fbf_set);
 +                                          mode = __atomic_load_n(&s_fbf_mode, __ATOMIC_RELAXED); } }
@@ -10186,8 +11559,7 @@ index 9a76e67..f363134 100644
 +    s_fbf.slot[u] = own_slot; s_fbf.remap[u] = t->remap & 0xFFFFu; s_fbf.fmt[u] = t->format;
 +    return 1;
 +}
- 
--        /* Several targets can share an address (one per size/format). Take
++
 +/* After eng_pipeline_get: the candidates the program did not let read the
 + * attachment get the copy, as before. */
 +static void eng_fbf_fallback(u32 textures[RSX_BE_MAX_TEXTURES])
@@ -10454,10 +11826,30 @@ index 9a76e67..f363134 100644
 +              if (textures[u]) return ENG_TB_OTHER;
 +          } }
 +        /* Several targets can share an address (one per size/format). Take
-          * the one whose size matches the texture, else the newest; never one
-          * this draw writes -- reading a target a pass is writing is undefined
-          * on every API, and an MRT set writes more than one of them. */
-@@ -1790,22 +5183,63 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
++         * the one whose size matches the texture, else the newest; never one
++         * this draw writes -- reading a target a pass is writing is undefined
++         * on every API, and an MRT set writes more than one of them. */
++        int sampled = -1, own_hit = 0, own_slot = -1;
++        for (u32 i = 0; i < g.n_surfaces; i++) {
++            if (!g.surfaces[i].handle || g.surfaces[i].location != t.location ||
++                g.surfaces[i].offset != t.offset)
++                continue;
++            int own = 0;
++            for (u32 k = 0; k < n_targets; k++) if (target_slots[k] == i) own = 1;
++            if (own) {
++                own_hit = 1;
++                if (g.surfaces[i].w == t.width && g.surfaces[i].h == t.height) own_slot = (int)i;
++                continue;
++            }
++            const int fits = g.surfaces[i].w == t.width && g.surfaces[i].h == t.height;
++            if (sampled < 0) { sampled = (int)i; continue; }
++            const int best_fits = g.surfaces[sampled].w == t.width && g.surfaces[sampled].h == t.height;
++            if (fits > best_fits || (fits == best_fits && g.surfaces[i].stamp > g.surfaces[sampled].stamp))
++                sampled = (int)i;
++        }
++        if (own_hit && sampled >= 0 && !(g.surfaces[sampled].w == t.width && g.surfaces[sampled].h == t.height))
+             sampled = -1;   /* only a stale alias of the target being written */
+         /* A read-modify-write pass samples the very target it draws into;
           * bind a copy taken just before this draw instead of guest memory,
           * which never sees GPU-rendered pixels. */
          if (sampled < 0 && own_slot >= 0 && g.be->color_snapshot && (eng_fp_tex_mask() >> u & 1u)) {
@@ -10524,7 +11916,7 @@ index 9a76e67..f363134 100644
          }
          const u32 base_fmt = t.format & RSX_TEX_FMT_BASE_MASK & ~(u32)RSX_TEX_FMT_UNNORM;
          { static int dbg = -1; if (dbg < 0) dbg = getenv("PS3RECOMP_ENG_ZTEX_LOG") ? 1 : 0;
-@@ -1822,11 +5256,11 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+@@ -1822,11 +5284,11 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
              for (u32 i = 0; i < g.n_zdepths; i++)
                  if (g.zdepths[i].location == t.location &&
                      g.zdepths[i].offset == t.offset && current_zslot != i) {
@@ -10538,7 +11930,7 @@ index 9a76e67..f363134 100644
          }
          /* A colour format over a depth buffer reads the depth bytes (fog,
           * depth-of-field, SSAO); the copy reflects depth before this draw, so
-@@ -1834,7 +5268,7 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+@@ -1834,7 +5296,7 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
          if (base_fmt == 0x85u || base_fmt == 0x9Eu) {
              for (u32 i = 0; i < g.n_zdepths; i++)
                  if (g.zdepths[i].location == t.location && g.zdepths[i].offset == t.offset) {
@@ -10547,21 +11939,20 @@ index 9a76e67..f363134 100644
                      if (snap) {
                          const u32 view = g.be->surface_view
                              ? g.be->surface_view(g.be->user, snap, t.remap & 0xFFFFu, t.format)
-@@ -1843,11 +5277,34 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
+@@ -1843,74 +5305,1929 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
                      }
                      break;
                  }
 -            if (textures[u]) continue;
 +            if (textures[u]) return ENG_TB_OTHER;
-         }
++        }
 +        /* CONTROL1's high word is the remap override the two-channel 16-bit
 +         * formats read (rsx_texture_component_remap); it rides along in the
 +         * cache key like the crossbar itself. */
 +        if ((textures[u] = eng_gpu_light_texture(&t)) != 0) return ENG_TB_OTHER;
 +        if ((textures[u] = eng_gpu_ssao_texture(&t)) != 0) return ENG_TB_OTHER;
-         textures[u] = eng_texture_slot(t.location, t.offset, t.format,
-                                        t.width, t.height, t.mipmaps, t.pitch,
--                                       (int)t.cubemap, t.remap & 0xFFFFu);
++        textures[u] = eng_texture_slot(t.location, t.offset, t.format,
++                                       t.width, t.height, t.mipmaps, t.pitch,
 +                                       (int)t.cubemap, t.remap & 0x1FFFFu,
 +                                       (t.dimension == 3 && !t.cubemap) ? t.depth : 1u);
 +        /* PS3RECOMP_ENG_RES_LOG=1: guest-memory textures of a screen-buffer
@@ -10581,48 +11972,39 @@ index 9a76e67..f363134 100644
 +                                  " (draw into 0x%08X %ux%u)\n",
 +                          (unsigned long long)fk, u, t.location, t.offset, t.format, t.width, t.height, t.filter,
 +                          g.surfaces[target_slots[0]].offset, g.surfaces[target_slots[0]].w, g.surfaces[target_slots[0]].h); } } }
-         /* PS3RECOMP_ENG_TEXLOG_RT=<hex>: guest-memory bindings of draws into
-          * colour target A at that offset (first 40). */
-         { static long trt = -2; static int n;
-@@ -1856,14 +5313,7 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
-               fprintf(stderr, "[rsx texlog] unit %u guest loc %u off 0x%08X fmt 0x%02X %ux%u mips %u pitch %u cube %d remap 0x%04X -> h%u\n",
-                       u, t.location, t.offset, t.format, t.width, t.height, t.mipmaps, t.pitch, (int)t.cubemap,
-                       t.remap & 0xFFFF, textures[u]); } }
--    }
--    { static long trt = -2; static int n;
--      if (trt == -2) { const char* e = getenv("PS3RECOMP_ENG_TEXLOG_RT"); trt = e ? (long)strtoul(e, 0, 16) : -1; }
--      if (trt >= 0 && n < 60 && g.rsx.pair_packets == 0 && n_targets && g.surfaces[target_slots[0]].offset == (u32)trt && (mask & 4u)) {
--          rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, 2, &t); n++;
--          fprintf(stderr, "[rsx texlog2] unit 2 loc %u off 0x%08X fmt 0x%02X %ux%u -> h%u\n",
--                  t.location, t.offset, t.format, t.width, t.height, textures[2]); } }
--    return mask;
++        /* PS3RECOMP_ENG_TEXLOG_RT=<hex>: guest-memory bindings of draws into
++         * colour target A at that offset (first 40). */
++        { static long trt = -2; static int n;
++          if (trt == -2) { const char* e = getenv("PS3RECOMP_ENG_TEXLOG_RT"); trt = e ? (long)strtoul(e, 0, 16) : -1; }
++          if (trt >= 0 && n < 40 && u == 2 && n_targets && g.surfaces[target_slots[0]].offset == (u32)trt) { n++;
++              fprintf(stderr, "[rsx texlog] unit %u guest loc %u off 0x%08X fmt 0x%02X %ux%u mips %u pitch %u cube %d remap 0x%04X -> h%u\n",
++                      u, t.location, t.offset, t.format, t.width, t.height, t.mipmaps, t.pitch, (int)t.cubemap,
++                      t.remap & 0xFFFF, textures[u]); } }
 +        return ENG_TB_PLAIN;
- }
- 
- static u32 sink_bind_vertex_textures(
-@@ -1871,15 +5321,16 @@ static u32 sink_bind_vertex_textures(
-     rsx_be_sampler_desc samplers[RSX_BE_MAX_VERTEX_TEXTURES])
- {
-     u32 bound = 0;
--    for (u32 u = 0; u < RSX_BE_MAX_VERTEX_TEXTURES; u++) {
++}
++
++static u32 sink_bind_vertex_textures(
++    u32 vtex_mask, u32 textures[RSX_BE_MAX_VERTEX_TEXTURES],
++    rsx_be_sampler_desc samplers[RSX_BE_MAX_VERTEX_TEXTURES])
++{
++    u32 bound = 0;
 +    for (u32 u = 0; u < RSX_BE_MAX_VERTEX_TEXTURES; eng_bf_unit_done(s_bf_vpos, u), u++) {   /* t35b */
-         if (!((vtex_mask >> u) & 1u)) continue;
-         rsx_dsp_vertex_texture vt;
-         rsx_dsp_get_vertex_texture(&g.rsx, u, &vt);
-         eng_decode_sampler(vt.filter, vt.wrap, vt.control0, &samplers[u]);
++        if (!((vtex_mask >> u) & 1u)) continue;
++        rsx_dsp_vertex_texture vt;
++        rsx_dsp_get_vertex_texture(&g.rsx, u, &vt);
++        eng_decode_sampler(vt.filter, vt.wrap, vt.control0, &samplers[u]);
 +        samplers[u].border = eng_border_class(vt.format, vt.border_color);
-         /* A vertex unit has no crossbar, so its remap is the identity. */
-         textures[u] = eng_texture_slot(vt.location, vt.offset, vt.format,
-                                        vt.width, vt.height, vt.mipmaps,
--                                       vt.pitch, 0, 0xAAE4u);
++        /* A vertex unit has no crossbar, so its remap is the identity. */
++        textures[u] = eng_texture_slot(vt.location, vt.offset, vt.format,
++                                       vt.width, vt.height, vt.mipmaps,
 +                                       vt.pitch, 0, 0xAAE4u, 1u);
-         if (textures[u]) bound |= 1u << u;
-     }
-     return bound;
-@@ -1887,8 +5338,41 @@ static u32 sink_bind_vertex_textures(
- 
- /* PS3RECOMP_ENG_DROPLOG=1: name each draw sink_end drops (first 6 per
-  * reason), with the primitive, packet/vertex counts and target address. */
++        if (textures[u]) bound |= 1u << u;
++    }
++    return bound;
++}
++
++/* PS3RECOMP_ENG_DROPLOG=1: name each draw sink_end drops (first 6 per
++ * reason), with the primitive, packet/vertex counts and target address. */
 +static u32 s_cap_until;   /* PS3RECOMP_ENG_CAPTURE: frames below this log every draw */
 +static int s_dbg_rs;        /* PS3RECOMP_ENG_DBG_RS: render-state override bits */
 +static void eng_live_debug_frame(void)
@@ -10653,18 +12035,27 @@ index 9a76e67..f363134 100644
 +    s_cap_until = g.frames + (u32)n;
 +    fprintf(stderr, "[cap] snap capture of %u frames from frame %u\n", n, g.frames);
 +}
- static void eng_drop(const char* why, u32 prim)
- {
++static void eng_drop(const char* why, u32 prim)
++{
 +    if (g.frames < s_cap_until)
 +        fprintf(stderr, "[cap] f=%u d=%u DROP %s prim=%u verts=%u fetch_ok=%d\n", g.frames, g.guest_draws, why, prim,
 +                dc.n_verts, dc.fetch_ok);
-     static int on = -1; static u32 from;
-     if (on < 0) { const char* e = getenv("PS3RECOMP_ENG_DROPLOG"); on = e ? 1 : 0; from = e ? (u32)atoi(e) : 0; }
-     if (!on || g.frames < from) return;   /* =<frame>: start counting there */
-@@ -1905,12 +5389,1810 @@ static void eng_drop(const char* why, u32 prim)
-             dc.n_idx, dc.n_verts, dc.fetch_ok, sf.color_offset[0], sf.clip_w, sf.clip_h, g.frames);
- }
- 
++    static int on = -1; static u32 from;
++    if (on < 0) { const char* e = getenv("PS3RECOMP_ENG_DROPLOG"); on = e ? 1 : 0; from = e ? (u32)atoi(e) : 0; }
++    if (!on || g.frames < from) return;   /* =<frame>: start counting there */
++    static struct { const char* why; u32 n; } seen[16];
++    u32 k = 0;
++    while (k < 16 && seen[k].why && seen[k].why != why) k++;
++    if (k == 16) return;
++    seen[k].why = why;
++    if (seen[k].n++ >= 6) return;
++    rsx_dsp_surface sf;
++    rsx_dsp_get_surface(&g.rsx, &sf);
++    fprintf(stderr, "[rsx engine] drop #%u (%s): prim=%u packets=%u arr=%u idx=%u verts=%u fetch_ok=%d"
++                    " rt=0x%X clip=%ux%u frame=%u\n", seen[k].n, why, prim, dc.n_packets, dc.n_arr,
++            dc.n_idx, dc.n_verts, dc.fetch_ok, sf.color_offset[0], sf.clip_w, sf.clip_h, g.frames);
++}
++
 +static u32 uploaded_hud_n(u32 n_verts, u32 n_draw, int indexed) { return indexed ? n_verts : n_draw; }
 +
 +/* PS3_ASPECT_HUD_AFTER (see sink_end): the composite programs, the frame the
@@ -11148,7 +12539,7 @@ index 9a76e67..f363134 100644
 +             s_dtk_n[DTK_I_DBP], s_dtk_n[DTK_I_ZSELF], s_dtk_n[DTK_I_LIGHT], s_dtk_n[DTK_D_ADDR]);
 +    memset(s_dtk_n, 0, sizeof s_dtk_n);
 +}
-+/* TDX_BEGIN ---- dt texdelta (PS3_ENG_DT_TEXDELTA; work/agent_texdelta/NOTES.md) ---------------------------------------
++/* TDX_BEGIN ---- dt texdelta (PS3_ENG_DT_TEXDELTA; texdelta notes) ---------------------------------------
 + * A draw that misses the draw-fast template (s_dt) or every draw-fast-N slot ONLY in the texture registers of units the
 + * template binds (tex_mask = enabled units the fragment program reads; programs, layout, render state, surface,
 + * viewport, the extra registers, the dt keyfix fields, the units outside tex_mask and the live targets all equal) is
@@ -11429,6 +12820,9 @@ index 9a76e67..f363134 100644
 +    memset(s_tdx_n, 0, sizeof s_tdx_n);
 +}
 +/* TDX_END */
++#include "rsx_vs_delta.h"          /* rsx lightning rules: the patched vertex rows travel (ba vs delta) */
++#include "rsx_lightning_rules.inc"   /* rsx lightning rules: run-time lightning colours (PS3_LIGHTNING_LIVE=1) */
++
 +static int eng_dt_replay(rsx_topology topology, u32 vbuf, u32 n_verts, eng_im_entry* e)   /* ba idx ref: e not const (idx_tk) */
 +{
 +    /* eng dirty: the register-derived inputs (render state, surface, viewport, the 8 extra registers and
@@ -11447,6 +12841,7 @@ index 9a76e67..f363134 100644
 +               ffm->structural == s_dt.fps_ && ffm->loc == s_dt.floc && ffm->off == s_dt.foff && ffm->size == s_dt.fsize &&
 +               s_dt.zslot < g.n_zdepths && g.zdepths[s_dt.zslot].handle == s_dt.depth_handle && g.zdepths[s_dt.zslot].cleared;
 +    for (u32 i = 0; same && i < s_dt.n_targets; i++) same = g.surfaces[s_dt.surf[i]].handle == s_dt.handles[i];
++    if (__builtin_expect(same && eng_lt_rules_live(), 0) && (eng_lt_rule_replay_hit(fvm, ffm) || eng_lt_binds_w(s_dt.textures, s_dt.tex_mask))) return 0;   /* rsx lightning rules / tint: the full path patches it */
 +    const int dirty_on = eng_dirty_on();
 +    const int clean = dirty_on && k.ok && !(g_rsx_dsp_dirty & 2u) &&
 +                      k.ccf == __atomic_load_n(&s_clamp_cull_flip, __ATOMIC_RELAXED) &&
@@ -11640,6 +13035,7 @@ index 9a76e67..f363134 100644
 +    const eng_vp_memo* fvm = NULL; const eng_fp_memo* ffm = NULL;
 +    eng_guest_programs(&fvm, &ffm);
 +    if (!fvm || !ffm) { s_dtm_miss[DTM_M_PROG]++; return 0; }
++    if (__builtin_expect(eng_lt_rules_live(), 0) && eng_lt_rule_replay_hit(fvm, ffm)) return 0;   /* rsx lightning rules */
 +    int reason = DTM_M_NOSLOT, decoded = 0, hit = -1, kfail = -1;
 +    int tdx = -1, tdx_hit = 0; u32 tdx_chg = 0;   /* dt texdelta: the most recently used texregs-only near-match */
 +    for (int i = 0; i < s_dtm_n; i++) {
@@ -11650,6 +13046,7 @@ index 9a76e67..f363134 100644
 +            t->vinstrs != fvm->instrs || t->fps_ != ffm->structural || t->floc != ffm->loc || t->foff != ffm->off ||
 +            t->fsize != ffm->size || t->topology != topology || t->stride != layout->stride || t->prim != prim ||
 +            s->lmask != layout->mask) continue;
++        if (__builtin_expect(eng_lt_rules_live(), 0) && eng_lt_binds_w(t->textures, t->tex_mask)) continue;   /* lt2 tint: the full path */
 +        if (reason < DTM_M_REGS) reason = DTM_M_REGS;
 +        if (!decoded) { eng_dtm_decode(); decoded = 1; }
 +        int tex_only = 0;
@@ -11846,7 +13243,18 @@ index 9a76e67..f363134 100644
 +                if (key[p] == h) { seen = 1; break; }
 +            }
 +            s_dtm_ideal_n++; s_dtm_ideal_seen += (unsigned)seen;
-+        }
+         }
+-        textures[u] = eng_texture_slot(t.location, t.offset, t.format,
+-                                       t.width, t.height, t.mipmaps, t.pitch,
+-                                       (int)t.cubemap, t.remap & 0xFFFFu);
+-        /* PS3RECOMP_ENG_TEXLOG_RT=<hex>: guest-memory bindings of draws into
+-         * colour target A at that offset (first 40). */
+-        { static long trt = -2; static int n;
+-          if (trt == -2) { const char* e = getenv("PS3RECOMP_ENG_TEXLOG_RT"); trt = e ? (long)strtoul(e, 0, 16) : -1; }
+-          if (trt >= 0 && n < 40 && u == 2 && n_targets && g.surfaces[target_slots[0]].offset == (u32)trt) { n++;
+-              fprintf(stderr, "[rsx texlog] unit %u guest loc %u off 0x%08X fmt 0x%02X %ux%u mips %u pitch %u cube %d remap 0x%04X -> h%u\n",
+-                      u, t.location, t.offset, t.format, t.width, t.height, t.mipmaps, t.pitch, (int)t.cubemap,
+-                      t.remap & 0xFFFF, textures[u]); } }
 +        s_dtm_volrec += (unsigned)vol;
 +        s_dt_full++;
 +    }
@@ -11881,12 +13289,33 @@ index 9a76e67..f363134 100644
 +                    s_dtv_by[15], s_dtv_by[16], s_dtv_unver, s_dtv_n3wb, s_dtv_n3z, g.frames);
 +        s_dt_fast = s_dt_full = 0; s_dtm_evict = s_dtm_volrec = s_dtm_flushes = s_dtm_forgot = 0; s_dtm_ideal_seen = s_dtm_ideal_n = 0;
 +        memset(s_dtm_rank, 0, sizeof s_dtm_rank); memset(s_dtm_miss, 0, sizeof s_dtm_miss); memset(s_dtm_inel, 0, sizeof s_dtm_inel);
-+    }
-+}
-+
+     }
+-    { static long trt = -2; static int n;
+-      if (trt == -2) { const char* e = getenv("PS3RECOMP_ENG_TEXLOG_RT"); trt = e ? (long)strtoul(e, 0, 16) : -1; }
+-      if (trt >= 0 && n < 60 && g.rsx.pair_packets == 0 && n_targets && g.surfaces[target_slots[0]].offset == (u32)trt && (mask & 4u)) {
+-          rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, 2, &t); n++;
+-          fprintf(stderr, "[rsx texlog2] unit 2 loc %u off 0x%08X fmt 0x%02X %ux%u -> h%u\n",
+-                  t.location, t.offset, t.format, t.width, t.height, textures[2]); } }
+-    return mask;
+ }
+ 
+-static u32 sink_bind_vertex_textures(
+-    u32 vtex_mask, u32 textures[RSX_BE_MAX_VERTEX_TEXTURES],
+-    rsx_be_sampler_desc samplers[RSX_BE_MAX_VERTEX_TEXTURES])
 +/* eng caster fast: replay the template for this caster; 0 = its inputs differ (take the full path). */
 +static int eng_ct_replay(rsx_topology topology, u32 vbuf, u32 n_verts, eng_im_entry* e)   /* ba idx ref: e not const (idx_tk) */
-+{
+ {
+-    u32 bound = 0;
+-    for (u32 u = 0; u < RSX_BE_MAX_VERTEX_TEXTURES; u++) {
+-        if (!((vtex_mask >> u) & 1u)) continue;
+-        rsx_dsp_vertex_texture vt;
+-        rsx_dsp_get_vertex_texture(&g.rsx, u, &vt);
+-        eng_decode_sampler(vt.filter, vt.wrap, vt.control0, &samplers[u]);
+-        /* A vertex unit has no crossbar, so its remap is the identity. */
+-        textures[u] = eng_texture_slot(vt.location, vt.offset, vt.format,
+-                                       vt.width, vt.height, vt.mipmaps,
+-                                       vt.pitch, 0, 0xAAE4u);
+-        if (textures[u]) bound |= 1u << u;
 +    {
 +        rsx_be_render_state frs; rsx_dsp_surface fsf; rsx_dsp_viewport fvp; u32 fr[8];
 +        memset(&fsf, 0, sizeof fsf); memset(&fvp, 0, sizeof fvp);
@@ -11896,6 +13325,7 @@ index 9a76e67..f363134 100644
 +        eng_ct_regs(fr);
 +        const eng_vp_memo* fvm = NULL; const eng_fp_memo* ffm = NULL;
 +        eng_guest_programs(&fvm, &ffm);
++        if (__builtin_expect(eng_lt_rules_live(), 0) && (eng_lt_rule_replay_hit(fvm, ffm) || eng_lt_binds_w(s_ct.textures, s_ct.tex_mask))) return 0;   /* rsx lightning rules / tint */
 +        int same = fvm == s_ct.vpm && ffm == s_ct.fpm && fvm && ffm &&
 +                   fvm->hash == s_ct.vph && fvm->start == s_ct.vstart && fvm->instrs == s_ct.vinstrs &&
 +                   ffm->structural == s_ct.fps_ && ffm->loc == s_ct.floc && ffm->off == s_ct.foff && ffm->size == s_ct.fsize &&
@@ -11940,10 +13370,14 @@ index 9a76e67..f363134 100644
 +            s_ct_fast++;
 +            return 1;
 +        }
-+    }
+     }
+-    return bound;
 +    return 0;
-+}
-+
+ }
+ 
+-/* PS3RECOMP_ENG_DROPLOG=1: name each draw sink_end drops (first 6 per
+- * reason), with the primitive, packet/vertex counts and target address. */
+-static void eng_drop(const char* why, u32 prim)
 +/* BFR_BEGIN (harness extract) */
 +/* t35b (F1): a draw's texture units were resolved while the backend freed something (end of the record moved past
 + * c0, the cursor right after the draw-start read). A copy request for one unit -- a depth->RGBA8 cache eviction, a
@@ -11964,7 +13398,21 @@ index 9a76e67..f363134 100644
 +                                                           u32 vtex_want, u32 vtextures[RSX_BE_MAX_VERTEX_TEXTURES],
 +                                                           rsx_be_sampler_desc vsamplers[RSX_BE_MAX_VERTEX_TEXTURES],
 +                                                           u32* vtex_mask)
-+{
+ {
+-    static int on = -1; static u32 from;
+-    if (on < 0) { const char* e = getenv("PS3RECOMP_ENG_DROPLOG"); on = e ? 1 : 0; from = e ? (u32)atoi(e) : 0; }
+-    if (!on || g.frames < from) return;   /* =<frame>: start counting there */
+-    static struct { const char* why; u32 n; } seen[16];
+-    u32 k = 0;
+-    while (k < 16 && seen[k].why && seen[k].why != why) k++;
+-    if (k == 16) return;
+-    seen[k].why = why;
+-    if (seen[k].n++ >= 6) return;
+-    rsx_dsp_surface sf;
+-    rsx_dsp_get_surface(&g.rsx, &sf);
+-    fprintf(stderr, "[rsx engine] drop #%u (%s): prim=%u packets=%u arr=%u idx=%u verts=%u fetch_ok=%d"
+-                    " rt=0x%X clip=%ux%u frame=%u\n", seen[k].n, why, prim, dc.n_packets, dc.n_arr,
+-            dc.n_idx, dc.n_verts, dc.fetch_ok, sf.color_offset[0], sf.clip_w, sf.clip_h, g.frames);
 +    for (u32 pass = 1;; pass++) {
 +        u32 fs = eng_bf_scan(c0, textures, *tex_mask, s_bf_upos, RSX_BE_MAX_TEXTURES);
 +        u32 vs = fs == ENG_BF_SCAN_LOST ? 0u : eng_bf_scan(c0, vtextures, *vtex_mask, s_bf_vpos, RSX_BE_MAX_VERTEX_TEXTURES);
@@ -12002,7 +13450,7 @@ index 9a76e67..f363134 100644
 +}
 +/* BFR_END */
 +
-+/* FS_BEGIN (harness extract) ---- dt fetchskip (PS3RECOMP_ENG_DT_FETCHSKIP; work/agent_fetchskip/NOTES.md) ----------
++/* FS_BEGIN (harness extract) ---- dt fetchskip (PS3RECOMP_ENG_DT_FETCHSKIP; fetchskip notes) ----------
 + * A draw that the single draw-fast template replays still decodes its vertex layout, builds and prepares a fetch
 + * plan and probes the vertex cache before the replay gate, only to learn "same persistent buffer as before". For a
 + * depth-only position-only draw (depth test + write on, no colour target or colour mask 0, vertex program input mask
@@ -12064,7 +13512,7 @@ index 9a76e67..f363134 100644
 +    if (!(rsx_dsp_reg(&g.rsx, M_DEPTH_WRITE) & 1u) || !(rsx_dsp_reg(&g.rsx, M_DEPTH_TEST_ENABLE) & 1u)) return 0;
 +    return (rsx_dsp_reg(&g.rsx, 0x0220u) & 0x1Fu) == 0u ||
 +           (rsx_dsp_reg(&g.rsx, M_COLOR_MASK) | (rsx_dsp_reg(&g.rsx, 0x0370u) & 0xFFF0u)) == 0u;
-+}
+ }
 +static inline void eng_dz_count(int replayed) { if (eng_depth_only()) { if (replayed) s_dz_rep++; else s_dz_full++; } }
 +/* The terms of an attribute-0-only draw's vertex-cache key, read as rsx_vertex_fetch_plan_init / prepare_ex (the
 + * consecutive idx memo case) read them. 0: not such a draw. */
@@ -12260,7 +13708,7 @@ index 9a76e67..f363134 100644
 +}
 +/* FS_END */
 +
-+/* CT_BEGIN ---- casterfix (work/agent_casterfix/NOTES.md) ------------------------------------------------------------
++/* CT_BEGIN ---- casterfix (casterfix notes) ------------------------------------------------------------
 + * PS3RECOMP_ENG_CASTER_FAST=3 = caster fast 2 with the vertex cache's own trust rule: a replayed caster skips layout,
 + * plan and vertex-cache probe only when the remembered cache entry passes eng_vc_entry_checked_this_frame (the probe's
 + * "already checked this frame" early return) and dc_fetch's hit test, and every input of that entry's key still equals
@@ -12448,7 +13896,7 @@ index 9a76e67..f363134 100644
 +    s_ctv_gate = s_ctv_g2 = s_ctv_g3 = 0; s_ct_recbad = 0;
 +}
 +/* CT_END */
-+
+ 
  static void sink_end(void* user, const rsx_dispatch* r)
  {
      (void)user; (void)r;
@@ -12472,7 +13920,7 @@ index 9a76e67..f363134 100644
  
      /* Everything that becomes triangles -- lists, strips, fans, quads, quad
       * strips and polygons -- is REBUILT into one triangle list through an
-@@ -1929,26 +7211,160 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -1929,26 +7246,160 @@ static void sink_end(void* user, const rsx_dispatch* r)
          if (topology == RSX_TOPOLOGY_UNSUPPORTED) { eng_drop("unsupported_topology", prim); return; }
      }
  
@@ -12637,7 +14085,7 @@ index 9a76e67..f363134 100644
  
      rsx_be_render_state rs;
      rsx_draw_engine_decode_render_state(&g.rsx, &rs);
-@@ -1976,29 +7392,345 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -1976,29 +7427,345 @@ static void sink_end(void* user, const rsx_dispatch* r)
      memset(vtextures, 0, sizeof vtextures);
      memset(vsamplers, 0, sizeof vsamplers);
      DS_MARK(ns_bind);   /* render state, targets, zeta: counted with binds */
@@ -12989,7 +14437,7 @@ index 9a76e67..f363134 100644
      }
  
      /* The transform constant block, then the viewport epilogue the vertex
-@@ -2025,7 +7757,20 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -2025,7 +7792,20 @@ static void sink_end(void* user, const rsx_dispatch* r)
      static int vpc_force_full = -1;
      if (vpc_force_full < 0) vpc_force_full = getenv("PS3RECOMP_ENG_VPC_FULL") ? 1 : 0;
      const int vpc_range = g.be->bind_vs_constants_range && !g.vpc_full && !vpc_force_full;
@@ -13011,7 +14459,7 @@ index 9a76e67..f363134 100644
          if (ds_t0 && !memcmp(g.vp_cb, g.rsx.constants, RSX_DSP_NUM_CONSTANTS * 16u)) ds.cb_same++;
          memcpy(g.vp_cb, g.rsx.constants, RSX_DSP_NUM_CONSTANTS * 16u);
          memcpy(g.vp_cb + RSX_DSP_NUM_CONSTANTS * 16u, xf, sizeof xf);
-@@ -2035,16 +7780,70 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -2035,16 +7815,70 @@ static void sink_end(void* user, const rsx_dispatch* r)
      /* The buffered fragment constants, then fp_alpha: the layout
       * rsx_fp_decompile_buffered_ex compiled the shader against. */
      const u32 nslots = g.fp_constants->count ? g.fp_constants->count : 1u;
@@ -13086,7 +14534,7 @@ index 9a76e67..f363134 100644
      { float* alpha = (float*)(g.fp_cb + nslots * 16u);
        alpha[0] = rsx_fp_alpha_ref(rs.alpha_ref_raw, rs.alpha_ref_format);
        /* WPOS y = pos.y * alpha[1] + alpha[2]: SHADER_WINDOW (0x1D88) bits
-@@ -2054,10 +7853,182 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -2054,10 +7888,182 @@ static void sink_end(void* user, const rsx_dispatch* r)
        const int bottom = (win >> 12) & 1;
        alpha[1] = bottom ? -1.0f : 1.0f;
        alpha[2] = bottom ? (float)(win & 0xFFFu) : 0.0f;
@@ -13270,7 +14718,19 @@ index 9a76e67..f363134 100644
      const u32 depth_handle = (zslot != ENG_INVALID) ? g.zdepths[zslot].handle : 0;
      if (zslot != ENG_INVALID && !g.zdepths[zslot].cleared) {
          g.be->clear_depth_stencil(g.be->user, depth_handle,
-@@ -2074,11 +8045,127 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -2071,14 +8077,208 @@ static void sink_end(void* user, const rsx_dispatch* r)
+     for (u32 i = 0; i < n_targets; i++) handles[i] = g.surfaces[targets[i]].handle;
+     g.be->bind_targets(g.be->user, handles, n_targets, depth_handle);
+     g.be->bind_pipeline(g.be->user, pipeline);
++    /* rsx lightning rules: a light / HUD tint in Cole's electricity colour takes the chosen colour, this draw only */
++    eng_lt_vsave lt_sv[4]; u32 lt_nsv = 0;
++    if (__builtin_expect(eng_lt_rules_live(), 0)) {
++        lt_nsv = eng_lt_rules_apply(g.fp_constants->count, !vpc_range && !vpc_whole, lt_sv, 4u, textures, tex_mask);
++        if (eng_lt_binds_w(textures, tex_mask)) {   /* lt2: the electric tint of the colourless fx */
++            const eng_vp_memo* lvm = NULL; const eng_fp_memo* lfm = NULL; eng_guest_programs(&lvm, &lfm);
++            eng_lt_tint_draw(&layout, indexed, n_draw, lfm ? lfm->structural : 0, lvm ? lvm->hash : 0, textures, tex_mask);
++        }
++    }
      if (vpc_range)
          g.be->bind_vs_constants_range(g.be->user, g.rsx.constants, g.vpc_lo,
                                        g.vpc_n, xf, sizeof xf, ENG_VP_CB_BYTES);
@@ -13279,6 +14739,7 @@ index 9a76e67..f363134 100644
 +                                      xf, sizeof xf, ENG_VP_CB_BYTES);
      else
          g.be->bind_vs_constants(g.be->user, g.vp_cb, ENG_VP_CB_BYTES);
++    if (__builtin_expect(lt_nsv != 0, 0)) eng_lt_rules_restore(lt_sv, lt_nsv);   /* (the backend copied the rows at the bind) */
      g.be->bind_ps_constants(g.be->user, g.fp_cb, fp_bytes);
      g.be->bind_textures(g.be->user, textures, samplers, tex_mask);
      g.be->bind_vertex_textures(g.be->user, vtextures, vsamplers, vtex_mask);
@@ -13361,7 +14822,75 @@ index 9a76e67..f363134 100644
 +            fprintf(stderr, "[cap]   st d=%u func=0x%X ref=0x%02X fmask=0x%02X wmask=0x%02X ops=0x%X/0x%X/0x%X 2s=%u zeta=0x%08X\n",
 +                    g.guest_draws, rs.s_func, rsx_dsp_reg(&g.rsx, M_STENCIL_FUNC_REF) & 0xFFu, rs.s_func_mask, rs.s_write_mask,
 +                    rs.s_fail, rs.s_zfail, rs.s_zpass, rs.stencil_two_sided, sf.zeta_offset);
++        /* PS3_LT_CAPX=1 (TEST ONLY, lt2 diagnosis): each captured draw's textures (content key, lightning row),
++         * fragment constants and vertex attribute ranges -- what colours a draw. */
++        { static int capx = -1; if (capx < 0) { const char* e = getenv("PS3_LT_CAPX"); capx = e && *e == '1'; }
++          if (capx) {
++            for (u32 u = 0; u < RSX_BE_MAX_TEXTURES; u++) {
++                if (!(tex_mask & (1u << u))) continue;
++                rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, u, &t);
++                if (!t.enabled) continue;
++                const u32 sp = eng_texture_span(t.format, t.width, t.height, t.mipmaps, t.pitch, (int)t.cubemap);
++                int rd = 0; const u64 ch = sp ? eng_texture_content_hash(t.location, t.offset, sp, &rd) : 0;
++                const u32 own = textures[u] && textures[u] < ENG_OWNER_N ? s_tex_owner[textures[u]] : 0u;
++                fprintf(stderr, "[capx]   tex u%u off 0x%08X loc %u fmt 0x%02X %ux%u mips %u key %016llx lt %u h%u\n", u, t.offset,
++                        t.location, t.format, t.width, t.height, t.mipmaps,
++                        (unsigned long long)(rd ? eng_texmod_key(ch, t.format, t.width, t.height) : 0),
++                        own ? (unsigned)g.textures[own - 1u].lt_idx : 0u, textures[u]);
++            }
++            const float* k = (const float*)g.fp_cb;
++            for (u32 q = 0; q < g.fp_constants->count && q < 16u; q++)
++                fprintf(stderr, "[capx]   fpk[%u] = (%g %g %g %g)\n", q, k[q * 4], k[q * 4 + 1], k[q * 4 + 2], k[q * 4 + 3]);
++            for (u32 c = g.vpc_lo; c < g.vpc_lo + g.vpc_n && c < g.vpc_lo + 24u && c < RSX_DSP_NUM_CONSTANTS; c++)
++                { float v4[4]; memcpy(v4, g.rsx.constants[c], sizeof v4);
++                  fprintf(stderr, "[capx]   vpc[%u] = (%g %g %g %g)\n", c, v4[0], v4[1], v4[2], v4[3]); }
++            { static const u16 hudc[] = { 460, 461, 462, 464, 465, 466, 467 };   /* the HUD sprite program's colour rows */
++              for (u32 i = 0; i < sizeof hudc / sizeof hudc[0]; i++)
++                { float v4[4]; memcpy(v4, g.rsx.constants[hudc[i]], sizeof v4);
++                  fprintf(stderr, "[capx]   c%u = (%g %g %g %g)\n", hudc[i], v4[0], v4[1], v4[2], v4[3]); } }
++            if (dc.verts && !(dc.vbuf_hit && indexed))
++                for (u32 a = 1; a < RSX_DSP_NUM_VERTEX_ATTR; a++) {
++                    const s8 sl = layout.slot_by_attr[a];
++                    if (sl < 0) continue;
++                    float an[4] = { 1e30f, 1e30f, 1e30f, 1e30f }, ax[4] = { -1e30f, -1e30f, -1e30f, -1e30f };
++                    for (u32 v = 0; v < uploaded_hud_n(dc.n_verts, n_draw, indexed); v++) {
++                        const float* q = (const float*)((const u8*)dc.verts + (size_t)v * layout.stride + (size_t)sl * 16u);
++                        for (int c = 0; c < 4; c++) { if (q[c] < an[c]) an[c] = q[c]; if (q[c] > ax[c]) ax[c] = q[c]; } }
++                    fprintf(stderr, "[capx]   attr%u [%g,%g] [%g,%g] [%g,%g] [%g,%g]\n", a, an[0], ax[0], an[1], ax[1], an[2], ax[2], an[3], ax[3]);
++                }
++            else fprintf(stderr, "[capx]   attrs cached (vbuf hit)\n");
++          } }
 +    }
++    /* PS3_LT_BLUELOG=1 (TEST ONLY, lt2 diagnosis): colour-like triples (all >= 0, max channel 0.05..1e4, one channel
++     * < 0.9 x max) in a draw's fragment constants or the vertex rows it uploaded, once per (program, place, ratio),
++     * with the frame -- how the lights / tints of a power were found (grep by frame against the firing windows). */
++    { static int bl = -1; if (__builtin_expect(bl < 0, 0)) { const char* e = getenv("PS3_LT_BLUELOG"); bl = e && *e == '1'; }
++      if (__builtin_expect(bl, 0)) {
++        static u64 seen[16384]; static u32 nseen;
++        const eng_vp_memo* vpm = NULL; const eng_fp_memo* fpm = NULL;
++        eng_guest_programs(&vpm, &fpm);
++        const u64 fk = fpm ? fpm->structural : 0;
++        for (int pass = 0; pass < 2; pass++) {
++            const u32 n = pass ? g.vpc_n : g.fp_constants->count;
++            for (u32 q = 0; q < n && q < 520u; q++) {
++                const u32 ci = pass ? g.vpc_lo + q : q;
++                if (pass && ci >= RSX_DSP_NUM_CONSTANTS) break;
++                float v[4];
++                if (pass) memcpy(v, g.rsx.constants[ci], sizeof v); else memcpy(v, g.fp_cb + q * 16u, sizeof v);
++                const float mx = v[0] > v[1] ? (v[0] > v[2] ? v[0] : v[2]) : (v[1] > v[2] ? v[1] : v[2]);
++                const float mn = v[0] < v[1] ? (v[0] < v[2] ? v[0] : v[2]) : (v[1] < v[2] ? v[1] : v[2]);
++                if (!(mx > 0.05f && mx < 1e4f && mn >= 0.0f && mn < 0.9f * mx)) continue;
++                const u32 qr = (u32)(v[0] / mx * 64.0f) | ((u32)(v[1] / mx * 64.0f) << 8) | ((u32)(v[2] / mx * 64.0f) << 16);
++                const u64 key = fk ^ ((u64)pass << 63) ^ ((u64)ci << 48) ^ ((u64)qr * 0x9E3779B97F4A7C15ull);
++                u32 k = 0; while (k < nseen && seen[k] != key) k++;
++                if (k < nseen || nseen >= 16384u) continue;
++                seen[nseen++] = key;
++                fprintf(stderr, "[bluelog] f=%u fp=%016llx vp=%016llx %s[%u] = (%g %g %g %g) n=%u rt=0x%08X blend=%u\n",
++                        g.frames, (unsigned long long)fk, (unsigned long long)(vpm ? vpm->hash : 0), pass ? "vpc" : "fpk", ci,
++                        v[0], v[1], v[2], v[3], dc.n_verts, g.surfaces[target].offset, rs.blend_enable);
++            }
++        }
++      } }
 +    /* PS3_ASPECT_HUD_AFTER=<fp hex>[,<fp hex>..]: the title's 2D overlay for
 +     * a backend rendering wide (PS3_ASPECT, set_hud). The listed fragment
 +     * programs are the title's last full-screen pass of a 3D frame (its
@@ -13398,7 +14927,7 @@ index 9a76e67..f363134 100644
      g.be->set_viewport(g.be->user, 0.0f, 0.0f, W, H);
  
      /* The guest scissor intersected with the surface. The nv40 reset is a
-@@ -2101,22 +8188,47 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -2101,22 +8301,47 @@ static void sink_end(void* user, const rsx_dispatch* r)
              sw = right > sx ? right - sx : 0;
              sh = bottom > sy ? bottom - sy : 0;
          }
@@ -13448,7 +14977,7 @@ index 9a76e67..f363134 100644
      if (ds_t0) {
          ds.draws++;
          ds.vbytes += (u64)uploaded * layout.stride;
-@@ -2126,8 +8238,88 @@ static void sink_end(void* user, const rsx_dispatch* r)
+@@ -2126,8 +8351,88 @@ static void sink_end(void* user, const rsx_dispatch* r)
          ds.ns_rest += eng_ds_now() - ds_t0;
      }
  
@@ -13538,7 +15067,7 @@ index 9a76e67..f363134 100644
  }
  
  static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
-@@ -2136,8 +8328,37 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
+@@ -2136,8 +8441,37 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
      if (!g.ready) return;
      u32 targets[RSX_BE_MAX_COLOR_TARGETS];
      const u32 n_targets = eng_current_target_set(targets);
@@ -13576,7 +15105,7 @@ index 9a76e67..f363134 100644
      if (mask & (RSX_CLEAR_COLOR_R | RSX_CLEAR_COLOR_G |
                  RSX_CLEAR_COLOR_B | RSX_CLEAR_COLOR_A)) {
          const u32 c = rsx_dsp_clear_color(&g.rsx);
-@@ -2159,9 +8380,12 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
+@@ -2159,9 +8493,12 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
          const u32 zslot = eng_zdepth_get(sf.zeta_location, sf.zeta_offset,
                                           sf.clip_w, sf.clip_h);
          if (zslot == ENG_INVALID) return;
@@ -13589,7 +15118,7 @@ index 9a76e67..f363134 100644
          /* ZSTENCIL_CLEAR_VALUE is Z24S8: depth24 << 8 | stencil8, with the
           * nv40 reset 0xFFFFFF00 seeded by rsx_dispatch_init, so a stream that
           * never writes it still clears to 1.0 / 0. */
-@@ -2170,12 +8394,15 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
+@@ -2170,12 +8507,15 @@ static void sink_clear(void* user, const rsx_dispatch* r, u32 mask)
                                    zs ? (float)(zs >> 8) / 16777215.0f : 1.0f,
                                    (u8)(zs & 0xFFu));
          g.zdepths[zslot].cleared = 1;
@@ -13607,7 +15136,7 @@ index 9a76e67..f363134 100644
          }
      }
  }
-@@ -2294,12 +8521,39 @@ static u32 s_pres_n[2], s_pres_drew[2];
+@@ -2294,12 +8634,39 @@ static u32 s_pres_n[2], s_pres_drew[2];
  static u64 s_pres_ns[2];
  static u64 eng_ds_now(void);
  
@@ -13648,7 +15177,7 @@ index 9a76e67..f363134 100644
          u32 current = eng_current_surface();
          fprintf(stderr, "[rsx capture] frame=%u buffer=%u selected=%u current=%u draws=%u surfaces=%u\n",
                  g.frames, buffer_id, target, current, g.guest_draws, g.n_surfaces);
-@@ -2317,6 +8571,10 @@ static void eng_present(u32 buffer_id)
+@@ -2317,6 +8684,10 @@ static void eng_present(u32 buffer_id)
                      on = e ? 1 : 0; if (e) off = (u32)strtoul(e, NULL, 16); }
        if (on) for (u32 i = 0; i < g.n_surfaces; ++i)
            if (g.surfaces[i].offset == off) { g.be->present(g.be->user, g.surfaces[i].handle); goto presented; } }
@@ -13659,7 +15188,7 @@ index 9a76e67..f363134 100644
      { const u64 t = eng_ds_now();
        g.be->present(g.be->user, g.surfaces[target].handle);
        const int src = s_present_src;
-@@ -2345,15 +8603,51 @@ presented:;
+@@ -2345,15 +8716,51 @@ presented:;
                memset(s_pres_n, 0, sizeof s_pres_n); memset(s_pres_drew, 0, sizeof s_pres_drew);
                memset(s_pres_ns, 0, sizeof s_pres_ns);
                pf = b0 = b1 = bw = 0; t0 = now; } } }
@@ -13715,7 +15244,7 @@ index 9a76e67..f363134 100644
            extern uint8_t* vm_base;
            FILE* f = fopen(dpath, "w");
            if (f && vm_base) {
-@@ -2375,9 +8669,10 @@ presented:;
+@@ -2375,9 +8782,10 @@ presented:;
            if (me) { char* d; mloc = (u32)strtoul(me, &d, 10); moff = (u32)strtoul(d + 1, &d, 16); mlen = (u32)strtoul(d + 1, 0, 0); } }
        if (me && g.guest_draws > 1000) { static u32 n; if ((n++ % 20) == 0) {
            const u8* q = eng_guest_ptr(NULL, mloc, moff, mlen);
@@ -13729,7 +15258,7 @@ index 9a76e67..f363134 100644
      /* PS3RECOMP_ENG_PROBE=<hex offset>[,<file.ppm>]: on world frames, read
       * back the newest target at that guest address and print its mean --
       * handles are not stable across runs, addresses are. */
-@@ -2408,7 +8703,55 @@ presented:;
+@@ -2408,7 +8816,55 @@ presented:;
                }
            } } }
      eng_constlog_frame_end();
@@ -13785,7 +15314,7 @@ index 9a76e67..f363134 100644
      eng_ds_frame_end(g.guest_draws);
      g.last_guest_draws = g.guest_draws;
      g.guest_draws = 0;
-@@ -2423,9 +8766,13 @@ static void sink_flip(void* user, const rsx_dispatch* r, u32 arg)
+@@ -2423,9 +8879,13 @@ static void sink_flip(void* user, const rsx_dispatch* r, u32 arg)
  
  /* ---- public API ---------------------------------------------------------- */
  
@@ -13800,7 +15329,7 @@ index 9a76e67..f363134 100644
  }
  
  void rsx_draw_engine_set_default(int on)
-@@ -2472,6 +8819,7 @@ int rsx_draw_engine_init(u32 width, u32 height)
+@@ -2472,6 +8932,7 @@ int rsx_draw_engine_init(u32 width, u32 height)
      sink.draw_index_array = sink_draw_index;
      sink.inline_array     = sink_inline_array;
      sink.flip             = sink_flip;
@@ -13808,7 +15337,7 @@ index 9a76e67..f363134 100644
      rsx_dispatch_init(&g.rsx, &sink);
      g.ready = 1;
      fprintf(stderr, "[rsx engine] register-file draw engine up (%ux%u)\n",
-@@ -2485,7 +8833,7 @@ void rsx_draw_engine_shutdown(void)
+@@ -2485,7 +8946,7 @@ void rsx_draw_engine_shutdown(void)
      if (g.ready && g.be->submit_and_wait)
          g.be->submit_and_wait(g.be->user, RSX_BE_FLUSH_SHUTDOWN);
      for (u32 i = 0; i < g.n_textures; i++)
@@ -13817,7 +15346,7 @@ index 9a76e67..f363134 100644
      for (u32 i = 0; i < g.n_pipelines; i++)
          if (g.pipelines[i].handle) g.be->pipeline_release(g.be->user, g.pipelines[i].handle);
      for (u32 i = 0; i < g.n_surfaces; i++)
-@@ -2505,6 +8853,19 @@ void rsx_draw_engine_shutdown(void)
+@@ -2505,6 +8966,19 @@ void rsx_draw_engine_shutdown(void)
      eng_tidx_rebuild();
  }
  
@@ -13837,7 +15366,7 @@ index 9a76e67..f363134 100644
  void rsx_draw_engine_method(u32 method, u32 arg)
  {
      if (!g.ready) return;
-@@ -2518,6 +8879,141 @@ void rsx_draw_engine_method(u32 method, u32 arg)
+@@ -2518,6 +8992,141 @@ void rsx_draw_engine_method(u32 method, u32 arg)
      rsx_dispatch_method(&g.rsx, m, arg);
  }
  
@@ -13979,7 +15508,7 @@ index 9a76e67..f363134 100644
  void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
                                          u32 pitch, u32 width, u32 height)
  {
-@@ -2531,6 +9027,125 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
+@@ -2531,6 +9140,125 @@ void rsx_draw_engine_set_display_buffer(u32 buffer_id, u32 location, u32 offset,
      d->valid = width && height;
  }
  
@@ -22400,7 +23929,7 @@ index e2687b7..1fbce19 100644
      else if (r != VK_SUCCESS) VK_LOG("vkQueuePresentKHR failed (VkResult %d)\n", (int)r);
  }
  
-+int g_vk_dump_now;   /* the PS5 debug server's "shot": the next present writes one */
++int g_vk_dump_now;   /* a debugger's "shot": the next present writes one */
 +/* snap combo: frames still to save (counts down on every present; every 3rd one is written). */
 +static volatile int s_snap_left;
 +static unsigned s_snap_n;
@@ -22434,7 +23963,7 @@ index e2687b7..1fbce19 100644
 +}
 +static unsigned long long s_dump_last_ns;
 +/* Whether this present reads the frame back: always headless (the readback is the output) or with a
-+ * per-frame dump; in a window only when a timed dump or the debug server's shot is due, and every
++ * per-frame dump; in a window only when a timed dump or a debugger's shot is due, and every
 + * 64th frame so last_center stays roughly current. Every other window present skips a full copy of
 + * the frame and a wait for the GPU. */
 +static int vk_readback_due(void)
@@ -26355,7 +27884,7 @@ index 9ea87db..4cc8e2b 100644
      uint64_t a0 = (uint64_t)addr & ~(pg - 1u);
      uint64_t a1 = ((uint64_t)addr + size + pg - 1u) & ~(pg - 1u);
 diff --git a/runtime/ppu/ppu_fs.cpp b/runtime/ppu/ppu_fs.cpp
-index 4c03372..9c9ff34 100644
+index 4c03372..0aac956 100644
 --- a/runtime/ppu/ppu_fs.cpp
 +++ b/runtime/ppu/ppu_fs.cpp
 @@ -13,6 +13,8 @@
@@ -26378,18 +27907,21 @@ index 4c03372..9c9ff34 100644
  #include <sys/stat.h>
  #include "../platform/win32_dirent.h"   /* <dirent.h>, or a Win32 stand-in */
  
-@@ -53,6 +57,10 @@ extern "C" void     vm_write64(uint64_t a, uint64_t v);
+@@ -53,6 +57,13 @@ extern "C" void     vm_write64(uint64_t a, uint64_t v);
  /* Host root that the PS3 mount points map into (dir containing PS3_GAME). */
  extern "C" const char* ppu_vfs_root = ".";
  
 +/* PS3_VOICE_LANG / PS3_TEXT_LANG: voice and text in different languages
 + * (redirected language archives, see the header). */
 +#include "ppu_fs_lang.h"
++/* PS3_MODS_DIR + PS3_MODS: enabled mods' packs replace the archives' copies
++ * (hidden in the TOCs, served as loose files; see the header). */
++#include "ppu_fs_mods.h"
 +
  /* CELL_FS return / mode / flag constants. */
  #define CELL_OK              0
  #define CELL_FS_ENOENT       (-2147418106)   /* 0x80010006 -- was -2147418090, which is 0x80010016 = CELL_ENOTCONN, not ENOENT */
-@@ -63,9 +71,14 @@ extern "C" const char* ppu_vfs_root = ".";
+@@ -63,9 +74,14 @@ extern "C" const char* ppu_vfs_root = ".";
  #define CELL_FS_O_RDONLY     0
  #define CELL_FS_O_WRONLY     1
  #define CELL_FS_O_RDWR       2
@@ -26407,7 +27939,7 @@ index 4c03372..9c9ff34 100644
  #define CELL_FS_SEEK_SET     0
  #define CELL_FS_SEEK_CUR     1
  #define CELL_FS_SEEK_END     2
-@@ -91,7 +104,7 @@ extern "C" void ps3_vfs_ps3game_fallback(char* path, size_t cap);
+@@ -91,7 +107,7 @@ extern "C" void ps3_vfs_ps3game_fallback(char* path, size_t cap);
  
  /* Translate a guest path to a host path under ppu_vfs_root. Known PS3 mount
   * prefixes are stripped; the rest is appended to the root. */
@@ -26416,7 +27948,7 @@ index 4c03372..9c9ff34 100644
  {
      const char* rel = guest;
      /* /dev_hdd0 overlays the installed game-update dir (a disc title patched to
-@@ -151,11 +164,21 @@ static void host_path(char* out, size_t cap, const char* guest)
+@@ -151,11 +167,21 @@ static void host_path(char* out, size_t cap, const char* guest)
      ps3_vfs_ps3game_fallback(out, cap);
  }
  
@@ -26438,10 +27970,16 @@ index 4c03372..9c9ff34 100644
  static DIR*  g_dirs[FS_MAX];
  static char  g_dir_path[FS_MAX][1024];   /* host path per open dir (for readdir stat) */
  
-@@ -185,6 +208,24 @@ static void cellFsOpen(ppu_context* ctx)
+@@ -184,7 +210,29 @@ static void cellFsOpen(ppu_context* ctx)
+     { char dec_path[1200];
        const char* use = edat_resolve(hpath, dec_path, sizeof dec_path);
        if (use != hpath) snprintf(hpath, sizeof hpath, "%s", use); }
- 
+-
++    /* A pack an enabled mod replaces: its archive entries are hidden, so the
++     * game asks for the loose file; read-only opens get the mod's copy. */
++    const ModsRepl* mods_vr = nullptr;   /* a delta mod's pack: hpath is a placeholder, mods_vf_* serve it */
++    if ((flags & 0x3) == CELL_FS_O_RDONLY) mods_vr = mods_redirect_host(gpath, hpath, sizeof hpath);
++
 +    { static int skip = -1;
 +      if (skip < 0) { const char* e = getenv("PS3_SKIP_MOVIES");
 +                      skip = !e ? 0 : !strcmp(e, "all") ? 2 : !strcmp(e, "intro") ? 1 : 0; }
@@ -26463,7 +28001,7 @@ index 4c03372..9c9ff34 100644
      /* fopen() mode strings can't express the PS3/POSIX open semantics (e.g.
       * O_WRONLY without create+truncate, or O_CREAT without O_TRUNC), so build
       * real open() flags from the access mode (low 2 bits) + the modifiers, then
-@@ -212,7 +253,7 @@ static void cellFsOpen(ppu_context* ctx)
+@@ -212,7 +260,7 @@ static void cellFsOpen(ppu_context* ctx)
      }
      int hfd = open(hpath, oflags | O_BINARY, 0666);
      if (hfd < 0) {
@@ -26472,8 +28010,14 @@ index 4c03372..9c9ff34 100644
          ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_ENOENT; return;
      }
      const char* fmode = (acc == CELL_FS_O_RDWR)
-@@ -229,11 +270,13 @@ static void cellFsOpen(ppu_context* ctx)
+@@ -227,13 +275,19 @@ static void cellFsOpen(ppu_context* ctx)
+     }
+     int fd = fd_alloc_file(f);
      if (fd < 0) { fclose(f); ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_EIO; return; }
++    if (mods_vr && !mods_vf_open(fd, mods_vr)) {
++        fclose(f); g_files[fd] = nullptr;
++        ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_EIO; return;
++    }
      if (fd_ptr) vm_write32(fd_ptr, (uint32_t)fd);
      g_fd_usm[fd] = (strstr(gpath, ".usm") != nullptr) ? 1 : 0;
 +    lang_on_open(fd, hpath);   /* a language's archive TOC / movie tracks to patch on read */
@@ -26486,7 +28030,7 @@ index 4c03372..9c9ff34 100644
      { char who[64] = "?";
        if (getenv("FS_CALLER")) { ppu_guest_caller(who, sizeof who);
            fprintf(stderr, "[fs] open '%s' -> fd %d  (opened by %s)\n", gpath, fd, who);
-@@ -341,14 +384,28 @@ static void cellFsSdataOpen(ppu_context* ctx)
+@@ -341,14 +395,29 @@ static void cellFsSdataOpen(ppu_context* ctx)
      ctx->gpr[3] = CELL_OK;
  }
  
@@ -26510,24 +28054,29 @@ index 4c03372..9c9ff34 100644
 +        fs_note_cutscene(fd); if (__atomic_sub_fetch(&g_ps3_cutscene_open, 1, __ATOMIC_RELAXED) < 0) g_ps3_cutscene_open = 0; }
      if (fd >= 0 && fd < FS_MAX && g_files[fd]) {
          if (g_fd_usm[fd] && getenv("PS3_FSLOG_READS")) fprintf(stderr, "[USMRD] CLOSE usm fd=%d\n", fd);
++        mods_vf_close(fd);
          fclose(g_files[fd]); g_files[fd] = nullptr; g_fd_usm[fd] = 0;
 +        lang_on_close(fd);
      }
      ctx->gpr[3] = CELL_OK;
  }
-@@ -382,11 +439,22 @@ static void cellFsRead(ppu_context* ctx)
+@@ -382,11 +451,24 @@ static void cellFsRead(ppu_context* ctx)
      uint64_t nbytes = ctx->gpr[5];
      uint32_t nread_ptr = (uint32_t)ctx->gpr[6];
      if (fd < 0 || fd >= FS_MAX || !g_files[fd]) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_EIO; return; }
 +    fs_note_cutscene(fd);
      uint64_t raw_nbytes = ctx->gpr[5];
-     long fpos_before = ftell(g_files[fd]);
+-    long fpos_before = ftell(g_files[fd]);
++    ModsVFile* mods_v = mods_vf(fd);   /* a delta mod's pack */
++    long fpos_before = mods_v ? (long)mods_vf_tell(mods_v) : ftell(g_files[fd]);
      if (ppu_vm_size && (uint64_t)buf + nbytes > ppu_vm_size) nbytes = ppu_vm_size - buf;
 +    const uint64_t sr0 = ps3_ft_now();
      fs_prefault(buf, nbytes);
+-    size_t n = fread(vm_base + buf, 1, (size_t)nbytes, g_files[fd]);   /* raw bytes, no swap */
 +    const uint64_t ft_r0 = PS3_FT_ON() ? ps3_ft_now() : 0;
 +    const uint64_t sr1 = ps3_ft_now();
-     size_t n = fread(vm_base + buf, 1, (size_t)nbytes, g_files[fd]);   /* raw bytes, no swap */
++    size_t n = mods_v ? mods_vf_read(mods_v, vm_base + buf, nbytes)
++                      : fread(vm_base + buf, 1, (size_t)nbytes, g_files[fd]);   /* raw bytes, no swap */
 +    {   const uint64_t sr2 = ps3_ft_now();
 +        static unsigned said;
 +        if (sr2 - sr0 > 5000000ull && said < 300) { said++;
@@ -26538,7 +28087,7 @@ index 4c03372..9c9ff34 100644
      /* PS3_FSLOG_EOF=<fd>,<bytes>: report end-of-file past <bytes> on one descriptor.
       * The intro cinematic is 28 seconds and this port renders it at a few frames
       * a second, so it cannot be watched to its end -- truncating the stream makes
-@@ -410,9 +478,9 @@ static void cellFsRead(ppu_context* ctx)
+@@ -410,9 +492,9 @@ static void cellFsRead(ppu_context* ctx)
        if (wfd >= 0 && fd == wfd)
            fprintf(stderr, "[fsread] fd=%d want=%llu got=%zu pos=%ld\n",
                    fd, (unsigned long long)nbytes, n, fpos_before); }
@@ -26550,7 +28099,7 @@ index 4c03372..9c9ff34 100644
  #endif
      /* Per-fd totals, not just the first 50 lines. The flat cap made "this file is
       * opened and never read" unfalsifiable: reads on a later-opened fd fall off
-@@ -424,10 +492,13 @@ static void cellFsRead(ppu_context* ctx)
+@@ -424,10 +506,13 @@ static void cellFsRead(ppu_context* ctx)
        tot+=n;
        if (fd>=0 && fd<64) { per_fd[fd]+=n; cnt_fd[fd]++; }
        int first_for_fd = (fd>=0 && fd<64 && cnt_fd[fd]==1);
@@ -26567,7 +28116,7 @@ index 4c03372..9c9ff34 100644
        if (getenv("FS_READ_PATH") && fd>=0 && fd<64 && g_fd_path[fd][0])
            fprintf(stderr, "        from %s\n", g_fd_path[fd]);
  #ifndef _WIN32
-@@ -545,7 +616,8 @@ static void cellFsLseek(ppu_context* ctx)
+@@ -545,10 +630,15 @@ static void cellFsLseek(ppu_context* ctx)
      uint32_t pos_ptr = (uint32_t)ctx->gpr[6];
      if (fd < 0 || fd >= FS_MAX || !g_files[fd]) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_EIO; return; }
      if (getenv("FS_CALLER")) { char w[64]="?"; ppu_guest_caller(w,sizeof w);
@@ -26575,9 +28124,47 @@ index 4c03372..9c9ff34 100644
 +        fprintf(stderr, "[fs] lseek fd=%d off=%lld whence=%u tid=%llu  (by %s)\n", fd, (long long)off, wh,
 +                (unsigned long long)ctx->thread_id, w); }
      int worigin = (wh == CELL_FS_SEEK_END) ? SEEK_END : (wh == CELL_FS_SEEK_CUR) ? SEEK_CUR : SEEK_SET;
++    long p;
++    if (ModsVFile* mv = mods_vf(fd)) p = (long)mods_vf_seek(mv, off, worigin);   /* a delta mod's pack */
++    else {
      fseek(g_files[fd], (long)off, worigin);
-     long p = ftell(g_files[fd]);
-@@ -621,7 +693,7 @@ static void cellFsFstat(ppu_context* ctx)
+-    long p = ftell(g_files[fd]);
++    p = ftell(g_files[fd]);
++    }
+     if (pos_ptr) vm_write64(pos_ptr, (uint64_t)p);
+     ctx->gpr[3] = CELL_OK;
+ }
+@@ -583,11 +673,13 @@ static void cellFsStat(ppu_context* ctx)
+     guest_strcpy(gpath, (uint32_t)ctx->gpr[3], sizeof gpath);
+     uint32_t sb = (uint32_t)ctx->gpr[4];
+     host_path(hpath, sizeof hpath, gpath);
++    const ModsRepl* mods_vr = mods_redirect_host(gpath, hpath, sizeof hpath);   /* open and stat agree on a mod's pack */
+     struct stat st;
+     if (stat(hpath, &st) != 0) {
+         if (getenv("PS3_FSLOG")) fprintf(stderr, "[fs] stat '%s' -> ENOENT\n", gpath);
+         ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_ENOENT; return;
+     }
++    if (mods_vr) st.st_size = (off_t)mods_vr->size;   /* a delta mod's pack: the size it is served at */
+     if (getenv("PS3_FSLOG")) fprintf(stderr, "[fs] stat '%s' -> OK (size=%lld)\n", gpath, (long long)st.st_size);
+     uint32_t mode = (st.st_mode & S_IFDIR) ? (CELL_FS_S_IFDIR | 0x1FF)
+                                            : (CELL_FS_S_IFREG | 0x1B6);
+@@ -603,10 +695,14 @@ static void cellFsFstat(ppu_context* ctx)
+     if (fd < 0 || fd >= FS_MAX || !g_files[fd]) { ctx->gpr[3] = (uint64_t)(int64_t)CELL_FS_EIO; return; }
+     if (getenv("FS_CALLER")) { char w[64]="?"; ppu_guest_caller(w,sizeof w);
+         fprintf(stderr, "[fs] fstat fd=%d  (by %s)\n", fd, w); }
++    long sz;
++    if (ModsVFile* mv = mods_vf(fd)) sz = (long)mv->r->size;   /* a delta mod's pack */
++    else {
+     long cur = ftell(g_files[fd]);
+     fseek(g_files[fd], 0, SEEK_END);
+-    long sz = ftell(g_files[fd]);
++    sz = ftell(g_files[fd]);
+     fseek(g_files[fd], cur, SEEK_SET);
++    }
+     /* FS_FSTAT_CAP=<bytes>: DIAGNOSTIC. Report a smaller size than the file
+      * has. You Don't Know Jack reads a 100 KB archive whole but only probes
+      * (open/fstat/close) its 500 KB and 2.4 MB ones; if that branch is driven
+@@ -621,7 +717,7 @@ static void cellFsFstat(ppu_context* ctx)
                sz = c; } } }
      struct stat hst; const int have_st = fstat(fileno(g_files[fd]), &hst) == 0;
      if (sb) write_stat(sb, CELL_FS_S_IFREG | 0x1B6, (uint64_t)sz, have_st ? &hst : nullptr);
@@ -26586,7 +28173,7 @@ index 4c03372..9c9ff34 100644
      ctx->gpr[3] = CELL_OK;
  }
  
-@@ -663,6 +735,61 @@ static void cellFsReaddir(ppu_context* ctx)
+@@ -663,6 +759,61 @@ static void cellFsReaddir(ppu_context* ctx)
      ctx->gpr[3] = CELL_OK;
  }
  
@@ -26648,7 +28235,32 @@ index 4c03372..9c9ff34 100644
  static void cellFsClosedir(ppu_context* ctx)
  {
      int fd = (int)(uint32_t)ctx->gpr[3];
-@@ -764,6 +891,7 @@ static void cellFsAioRead(ppu_context* ctx)
+@@ -706,6 +857,24 @@ static void cellFsMkdir(ppu_context* ctx)
+     ctx->gpr[3] = CELL_OK;   /* existing dir is benign for boot */
+ }
+ static void cellFsRmdir(ppu_context* ctx)  { ctx->gpr[3] = CELL_OK; }
++/* cellFsRename (2026-11-13, UGC downloads): the old HLE (libs/filesystem/cellFs.c) maps both paths under a relative
++ * "gamedata/" folder, not where this file's opens put them (host_path), so the game's "write <pack>.tmp, rename into
++ * place" always failed. With PS3_UGC_ONLINE=1 the rename uses host_path for both sides; otherwise the old call runs
++ * unchanged (same arguments), so released behaviour is identical. */
++extern "C" int32_t cellFsRename(const char* from, const char* to);
++static void cellFsRenameCtx(ppu_context* ctx)
++{
++    static int on = -1;
++    if (on < 0) { const char* e = getenv("PS3_UGC_ONLINE"); on = e && *e == '1'; }
++    if (!on) { ctx->gpr[3] = (uint64_t)(int64_t)cellFsRename((const char*)(uintptr_t)(uint32_t)ctx->gpr[3], (const char*)(uintptr_t)(uint32_t)ctx->gpr[4]); return; }
++    char gf[1024], gt[1024], hf[1100], ht[1100];
++    guest_strcpy(gf, (uint32_t)ctx->gpr[3], sizeof gf); guest_strcpy(gt, (uint32_t)ctx->gpr[4], sizeof gt);
++    host_path(hf, sizeof hf, gf); host_path(ht, sizeof ht, gt);
++    { char dir[1100]; snprintf(dir, sizeof dir, "%s", ht); char* sl = strrchr(dir, '/'); if (sl && sl != dir) { *sl = 0; host_mkdir_p(dir); } }
++    const int r = rename(hf, ht);
++    fprintf(stderr, "[fs] rename '%s' -> '%s' (%s)\n", gf, gt, r == 0 ? "OK" : strerror(errno));
++    ctx->gpr[3] = r == 0 ? CELL_OK : 0x80010006u;   /* CELL_ENOENT */
++}
+ static void cellFsUnlink(ppu_context* ctx) { ctx->gpr[3] = CELL_OK; }
+ static void cellFsFsync(ppu_context* ctx)
+ {
+@@ -764,6 +933,7 @@ static void cellFsAioRead(ppu_context* ctx)
      uint32_t cb_opd = (uint32_t)ctx->gpr[5];
  
      int      fd     = (int)guest_be32(aio + 0x00);
@@ -26656,15 +28268,19 @@ index 4c03372..9c9ff34 100644
      uint64_t offset = guest_be64(aio + 0x08);
      uint32_t buf    = guest_be32(aio + 0x10);
      uint64_t size   = guest_be64(aio + 0x18);
-@@ -781,6 +909,7 @@ static void cellFsAioRead(ppu_context* ctx)
+@@ -779,8 +949,10 @@ static void cellFsAioRead(ppu_context* ctx)
+         fs_prefault(buf, size);
+         /* AIO reads are absolute -- they do not disturb the fd's own file
           * position, and the guest interleaves them freely across threads. */
-         if (HOST_FSEEK64(g_files[fd], offset) == 0)
+-        if (HOST_FSEEK64(g_files[fd], offset) == 0)
++        if (ModsVFile* mv = mods_vf(fd)) n = mods_vf_pread(mv, offset, vm_base + buf, size);   /* a delta mod's pack */
++        else if (HOST_FSEEK64(g_files[fd], offset) == 0)
              n = fread(vm_base + buf, 1, (size_t)size, g_files[fd]);
 +        lang_apply(fd, offset, vm_base + buf, n);
          err = CELL_OK;
      }
      if (getenv("PS3_FSLOG"))
-@@ -808,6 +937,7 @@ extern "C" void ppu_fs_register(void)
+@@ -808,10 +980,12 @@ extern "C" void ppu_fs_register(void)
      ps3_hle_register_ctx(ps3_compute_nid("cellFsStat"),     "cellFsStat",     cellFsStat);
      ps3_hle_register_ctx(ps3_compute_nid("cellFsFstat"),    "cellFsFstat",    cellFsFstat);
      ps3_hle_register_ctx(ps3_compute_nid("cellFsOpendir"),  "cellFsOpendir",  cellFsOpendir);
@@ -26672,6 +28288,11 @@ index 4c03372..9c9ff34 100644
      ps3_hle_register_ctx(ps3_compute_nid("cellFsReaddir"),  "cellFsReaddir",  cellFsReaddir);
      ps3_hle_register_ctx(ps3_compute_nid("cellFsClosedir"), "cellFsClosedir", cellFsClosedir);
      ps3_hle_register_ctx(ps3_compute_nid("cellFsMkdir"),    "cellFsMkdir",    cellFsMkdir);
+     ps3_hle_register_ctx(ps3_compute_nid("cellFsRmdir"),    "cellFsRmdir",    cellFsRmdir);
++    ps3_hle_register_ctx(ps3_compute_nid("cellFsRename"),   "cellFsRename",   cellFsRenameCtx);
+     ps3_hle_register_ctx(ps3_compute_nid("cellFsUnlink"),   "cellFsUnlink",   cellFsUnlink);
+     ps3_hle_register_ctx(ps3_compute_nid("cellFsFsync"),    "cellFsFsync",    cellFsFsync);
+     ps3_hle_register_ctx(ps3_compute_nid("cellFsAllocateFileAreaWithoutZeroFill"),
 diff --git a/runtime/ppu/ppu_hle.cpp b/runtime/ppu/ppu_hle.cpp
 index b0a2608..7df857b 100644
 --- a/runtime/ppu/ppu_hle.cpp
@@ -27012,17 +28633,17 @@ index 11c3470..fe8d944 100644
  static ppu_fn   g_fn[PPU_HASH_SIZE];
  static uint32_t g_fn_count = 0;
  
-+/* ppu icall cache (2026-11-11, agent_ppucost): PS3_ICALL_CACHE=1 puts a 32 KB direct-mapped cache of positive
++/* ppu icall cache (2026-11-11, ppucost notes): PS3_ICALL_CACHE=1 puts a 32 KB direct-mapped cache of positive
 + * lookups in front of ppu_lookup on ps3_indirect_call's fast path; unset/0 = the lookup exactly as before.
 + * Why: the fast path's lookup touches two 1-2 MB arrays (g_fn, g_addr) per guest bctrl; on inFAMOUS 1's main
-+ * thread ps3_indirect_call was 2.9% self (BC perf, work/agent_if1main/bc_main_pq.txt). Main's hot vtable
++ * thread ps3_indirect_call was 2.9% self (BC perf, if1main notes). Main's hot vtable
 + * targets fit the cache (one 8-byte word per target, one load on a hit).
 + * Entry = (guest addr << 32) | (fn - anchor) as a signed 32-bit offset, written and read as ONE 64-bit word,
 + * so a reader never pairs one target's address with another target's function. 0 = empty (addr 0 is never
 + * looked up). Only found targets are cached: unknown targets keep the full path. Exactness: a lookup's result
 + * only changes when an address is RE-registered with a different function (inserts of new addresses never change
 + * an existing result; g_fn entries are never removed, a PRX unload leaves them as they are).
-+ * Re-registration (agent_exactfix fix, 2026-11-11): the first version turned the cache off for the whole run on the
++ * Re-registration (exactfix notes fix, 2026-11-11): the first version turned the cache off for the whole run on the
 + * first overwrite -- and every run overwrites at boot: lv2_prx's lfq_install re-registers libsre's LFQueue push/pop
 + * (the console logs' "[lfq] libsre LFQueue ... polls instead of blocking"), so the cache was off in all three games.
 + * Now: g_icc_gen picks the live table out of PPU_ICC_GENS; an overwrite that changes the function retires the live
@@ -27077,8 +28698,8 @@ index 11c3470..fe8d944 100644
  static struct { void* host; uint32_t guest; } g_inv[PPU_HASH_SIZE];
  static uint32_t g_inv_n = 0;
 -extern "C" uint32_t ppu_prof_resolve_host(void* ra)
-+/* ppu prof memo (2026-11-11, agent_exactfix): ps3_hle_call and lv2_syscall resolve their host return address on
-+ * EVERY call for the prof_pc breadcrumb (read by tdump / the debug server's "threads" / LWM-CONVOY, so it cannot be
++/* ppu prof memo (2026-11-11, exactfix notes): ps3_hle_call and lv2_syscall resolve their host return address on
++ * EVERY call for the prof_pc breadcrumb (read by tdump / a debugger's "threads" / LWM-CONVOY, so it cannot be
 + * gated on a profiler switch): a 15-step binary search over ~27k entries, 0.56% of inFAMOUS 1's main thread.
 + * The inverse table is built once and never changes afterwards, so the answer for a given return address is a pure
 + * function of it: memoise it per return address in a direct-mapped table. Entry = (ra - anchor) << 32 | guest, one
@@ -27762,7 +29383,7 @@ index 35052c6..7dbecf0 100644
  VMX_FUN(vmx_vrfim, floorf(f), 1, 2)
  
  /* int <-> float with a 2^uimm scale */
-+/* vmx cvt exact (2026-11-11, agent_exactfix): no libm call per lane. The ldexpf forms cost 4 calls per vcfsx
++/* vmx cvt exact (2026-11-11, exactfix notes): no libm call per lane. The ldexpf forms cost 4 calls per vcfsx
 + * (ldexpf -> scalbnf, with ymm spills around each: 0.89% of inFAMOUS 1's main thread on the BC-250), and vctsxs /
 + * vctuxs called ldexpf(1.0f, uimm) per lane too (clang does not fold it). Same bits for every input:
 + *  - the conversion is one correctly rounded int32/uint32 -> float, as the C cast before (round-to-nearest, the PPU
@@ -27774,7 +29395,7 @@ index 35052c6..7dbecf0 100644
 + * The loops stay loops on purpose: the IR-PGO training build pre-inlines these helpers into the lifted functions,
 + * so their blocks are part of each caller's CFG hash; a straight-line form would orphan the profile of every lifted
 + * function using vcfsx (checked: same -fprofile-generate hash as before). clang -O3 still turns each loop into
-+ * load + pshufb + cvtdq2ps (+ mulps) + pshufb + store. Proof: work/agent_exactfix (cvt_test.c, ctx_test.cpp).
++ * load + pshufb + cvtdq2ps (+ mulps) + pshufb + store. Proof: exactfix notes (cvt_test.c, ctx_test.cpp).
 + * -DPS3_VMX_CVT_EXACT=0 = the ldexpf forms exactly as they were. */
 +#ifndef PS3_VMX_CVT_EXACT
 +#define PS3_VMX_CVT_EXACT 1
@@ -27820,7 +29441,7 @@ index 35052c6..7dbecf0 100644
          uint32_t v = (!(x <= y) ? 0x80000000u : 0) | (!(x >= -y) ? 0x40000000u : 0);
          inb &= v == 0; vmx_sw(r, i, v); } VMX_OUT; return (uint32_t)(inb << 1); }
  
-+/* ppu vmx vec (2026-11-11, agent_if1hot): SSE forms of the VMX helpers that clang leaves as byte-at-a-time scalar
++/* ppu vmx vec (2026-11-11, if1hot notes): SSE forms of the VMX helpers that clang leaves as byte-at-a-time scalar
 + * loops (vmx_w/vmx_sw gather/scatter: ~25 instructions per lane, and 16 single-byte stores into ctx->vr that the next
 + * 16-byte read of that register cannot store-forward on Zen 2). Same bits as the loops above for every input and
 + * every MXCSR state: the same IEEE operation per lane (divps/sqrtps = divss/sqrtss; cmpps predicates = the C
@@ -28076,7 +29697,7 @@ index 3addd48..7f86ae9 100644
 +    if (i < 0 || i >= SPU_MAX_CONTEXTS) return NULL;
 +    return __atomic_load_n(&s_mfc_slots[i].ctx, __ATOMIC_ACQUIRE);
 +}
-+/* That context's registers, for the debug server's "spuregs": pc, status and all 128 GPRs. */
++/* That context's registers, for a debugger's "spuregs": pc, status and all 128 GPRs. */
 +int spu_ctx_regs_to(FILE* o, int i)
 +{
 +    const spu_context* c = spu_ctx_at(i);
@@ -28090,13 +29711,13 @@ index 3addd48..7f86ae9 100644
 +    fflush(o);
 +    return 1;
 +}
-+/* That context's local store (256 KB), for the debug server's "ls". */
++/* That context's local store (256 KB), for a debugger's "ls". */
 +const uint8_t* spu_ctx_ls(int i)
 +{
 +    const spu_context* c = spu_ctx_at(i);
 +    return c ? c->ls : NULL;
 +}
-+/* if1 jl prof (2026-11-11, work/agent_if1jobs; called only by inFAMOUS 1's lifted func_0041FC38 with
++/* if1 jl prof (2026-11-11, if1jobs notes; called only by inFAMOUS 1's lifted func_0041FC38 with
 + * PS3_IF1_JLPROF=1): a racy snapshot of every live SPU context, 6 words each: group id, status (8 = parked in
 + * a channel wait), lifted image id (9 WWS policy module, 100 SPURS kernel, 200-220 jobmods), and from the
 + * SPURS kernel context in LS (SpursKernelContext at 0x100): the instance EA (low word of 0x1C0), spuNum (0x1C8)
@@ -28789,7 +30410,7 @@ index 3addd48..7f86ae9 100644
 +}
 +#endif
 +
-+/* spu idle spin (2026-11-11, work/agent_if1wake; PS3_SPU_IDLE_SPIN_US=<us>, default unset/0 = off: every path below
++/* spu idle spin (2026-11-11, if1wake notes; PS3_SPU_IDLE_SPIN_US=<us>, default unset/0 = off: every path below
 + * is the code of before). Meant for inFAMOUS 1's gameplay SPURS instance only (set it on the G_IF1 line).
 + *
 + * A SPURS kernel with nothing to run parks in rdch SPU_RdEventStat (pc 0x13F4, mask 0x400) until its lock line
@@ -29469,7 +31090,7 @@ index 3addd48..7f86ae9 100644
 +    return 1;
 +}
 +
-+/* ovl prefix (if1spu_02, work/agent_if1con + agent_if1stack, 2026-11-11). PS3_SPU_OVL_PREFIX=1 = on; unset/0 = off
++/* ovl prefix (if1spu_02, if1con notes + if1stack notes, 2026-11-11). PS3_SPU_OVL_PREFIX=1 = on; unset/0 = off
 + * (the code of before, no counter). A data GET that overlaps a fixed-address lift paid a full gm_equal against
 + * the lift's image (odd sizes: 256-byte bounce copy + memcmp per chunk) only to find the first bytes differ.
 + * With the switch on, the first min(16, n) bytes of the SAME range [lo, hi) are compared first. Exact: gm_equal
@@ -30408,7 +32029,7 @@ index 89f3d8e..06cd794 100644
 +    __atomic_add_fetch(r ? &g_mk_timeouts : &g_mk_woken, 1, __ATOMIC_RELAXED);
 +}
 +
-+/* if1 jl spin (if1spu_03; 2026-11-11, work/agent_if1jobs; called ONLY from inFAMOUS 1's lifted func_0041FC38 when
++/* if1 jl spin (if1spu_03; 2026-11-11, if1jobs notes; called ONLY from inFAMOUS 1's lifted func_0041FC38 when
 + * PS3_IF1_JL_SPIN_US > 0, so inFAMOUS 2 / Festival of Blood never reach it).
 + *
 + * The job-list wait of before (ps3_memkick_wait) registers in g_mk_waiters for every 2 us turn: while the
@@ -30483,8 +32104,8 @@ index 89f3d8e..06cd794 100644
 +    return out;
 +}
 +
-+/* line watch (2026-11-11, work/agent_if2main; taken from the parked if1 JLWATCH patch, agent_if1poll, with the
-+ * agent_pollreview fixes: own cache lines, optional slice). Default off: nothing calls ps3_mkw_wait unless
++/* line watch (2026-11-11, if2main notes; taken from the parked if1 JLWATCH patch, if1poll notes, with the
++ * pollreview notes fixes: own cache lines, optional slice). Default off: nothing calls ps3_mkw_wait unless
 + * sys_timer_usleep's PS3_IF2_LANEWATCH=1 path does, and every SPU write pays one relaxed load of g_mkw_line (0).
 + * One guest thread at a time may wait for SPU writes to ONE 128-byte line (inFAMOUS 2's main thread polling the 7
 + * SPU lanes of a WWS job-list record that the job manager bumps with PUTLLC). Only a write to that line, a true
@@ -34088,7 +35709,7 @@ index d756b8d..65997e2 100644
 +    const uint32_t base = g->fix_to ? g->fix_from : g->spurs_base;                       /* spurs maxcont fix */
 +    const uint32_t all  = g->fix_to ? g->fix_to   : g->spurs_base + g->spurs_extra;
 +    if (!ea || !vm_base) return 0;
-+    /* spurs maxcont wkl mask (work/agent_spu6, 2026-11-11): SPURS_MAXCONT_WKL=<hex mask of workload ids> limits the
++    /* spurs maxcont wkl mask (spu6 notes, 2026-11-11): SPURS_MAXCONT_WKL=<hex mask of workload ids> limits the
 +     * maxcont fix (bytes AND the priority copy) to those workloads; unset = all 16 = the behaviour of before. With a
 +     * mask, the libsre attribute hook (if1 spurs prio8) leaves workloads alone, so ONLY this thread widens them:
 +     * a workload outside the mask keeps priority 0 on the added SPUs and never runs there. */
@@ -35155,7 +36776,7 @@ index 877b632..0155663 100644
  
 +#ifndef _WIN32
 +#include <time.h>
-+/* if2 main-thread polls (2026-11-11, work/agent_if2main/NOTES.md). inFAMOUS 2's main thread polls with usleep(1/3/5/10)
++/* if2 main-thread polls (2026-11-11, if2main notes). inFAMOUS 2's main thread polls with usleep(1/3/5/10)
 + * at these sites (lr = return address of the call made just before the site's sc; every word below is checked):
 + *   GPU   0x0013C280  func_0013ACE8: renderer GPU throttle, (s32)(CellGcmControl.ref - frame) >= 0, usleep(5)
 + *   JLD   0x0038AA3C/7C/A4  func_0038AA14: WWS job list done (func_0054CE30), usleep(1)

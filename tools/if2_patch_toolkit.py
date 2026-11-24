@@ -2550,7 +2550,7 @@ extern "C" ppu_context* g_ppu_main_ctx_live; /* PS3_THREAD_DUMP (sys_ppu_thread.
      "tdump main live ctx decl")
 
 # dbgsrv runtime hooks: the thread dump to any FILE, SPU contexts by index, a screenshot on demand
-# For the PS5 app's debug server (tools/ps5/ps5_app.c, PS5_DEBUG_PORT): the same dump PS3_THREAD_DUMP
+# For a debugger: the same dump PS3_THREAD_DUMP
 # writes to the log, written to a file the server sends back; an SPU context's local store by its
 # slot; and g_vk_dump_now, which makes the next present write a screenshot whatever the interval.
 edit("runtime/syscalls/sys_ppu_thread.c",
@@ -2617,7 +2617,7 @@ const spu_context* spu_ctx_at(int i)
     if (i < 0 || i >= SPU_MAX_CONTEXTS) return NULL;
     return __atomic_load_n(&s_mfc_slots[i].ctx, __ATOMIC_ACQUIRE);
 }
-/* That context's local store (256 KB), for the debug server's "ls". */
+/* That context's local store (256 KB), for a debugger's "ls". */
 const uint8_t* spu_ctx_ls(int i)
 {
     const spu_context* c = spu_ctx_at(i);
@@ -2633,7 +2633,7 @@ void spu_dump_contexts_to(FILE* o)
 edit("libs/video/rsx_vulkan_backend.c",
      '''static void vk_dump_ppm(const unsigned char* rgba)
 {''',
-     '''int g_vk_dump_now;   /* the PS5 debug server's "shot": the next present writes one */
+     '''int g_vk_dump_now;   /* a debugger's "shot": the next present writes one */
 static void vk_dump_ppm(const unsigned char* rgba)
 {''',
      "dbgsrv shot flag")
@@ -2643,7 +2643,7 @@ edit("libs/video/rsx_vulkan_backend.c",
         g_vk_dump_now = 0;''',
      "dbgsrv shot now")
 
-# dbgsrv regs: a guest thread's registers for the PS5 debug server ("regs <tid>")
+# dbgsrv regs: a guest thread's registers for the PS5 debugger ("regs <tid>")
 # A thread parked in a syscall keeps its arguments and callee-saved registers in its context; with
 # them the object it waits on (an event flag, a queue, a lock) can be read from memory.
 edit("runtime/syscalls/sys_ppu_thread.c",
@@ -2669,8 +2669,8 @@ int ps3_thread_regs_to(FILE* o, int tid)
 }''',
      "dbgsrv regs")
 edit("runtime/spu/spu_channels.c",
-     '''/* That context's local store (256 KB), for the debug server's "ls". */''',
-     '''/* That context's registers, for the debug server's "spuregs": pc, status and all 128 GPRs. */
+     '''/* That context's local store (256 KB), for a debugger's "ls". */''',
+     '''/* That context's registers, for a debugger's "spuregs": pc, status and all 128 GPRs. */
 int spu_ctx_regs_to(FILE* o, int i)
 {
     const spu_context* c = spu_ctx_at(i);
@@ -2684,7 +2684,7 @@ int spu_ctx_regs_to(FILE* o, int i)
     fflush(o);
     return 1;
 }
-/* That context's local store (256 KB), for the debug server's "ls". */''',
+/* That context's local store (256 KB), for a debugger's "ls". */''',
      "dbgsrv spuregs")
 
 # eng live debug: a live frame capture and render-state overrides through PS3_TOGGLE_FILE
@@ -3351,7 +3351,7 @@ edit("libs/video/rsx_vulkan_backend.c",
     static unsigned long long last_ns;''',
      '''static unsigned long long s_dump_last_ns;
 /* Whether this present reads the frame back: always headless (the readback is the output) or with a
- * per-frame dump; in a window only when a timed dump or the debug server's shot is due, and every
+ * per-frame dump; in a window only when a timed dump or a debugger's shot is due, and every
  * 64th frame so last_center stays roughly current. Every other window present skips a full copy of
  * the frame and a wait for the GPU. */
 static int vk_readback_due(void)
@@ -5397,7 +5397,7 @@ if "vk ubo shadow: save/restore" not in done:
     (tk / VKB).write_text(_s)
     mark("vk ubo shadow: save/restore")
     print("patched", VKB, "- vk ubo shadow: save/restore")
-# tdump waits: the guest thread dump (debug server `threads`, PS3_THREAD_DUMP) names what each guest
+# tdump waits: the guest thread dump (debugger `threads`, PS3_THREAD_DUMP) names what each guest
 # thread is blocked in. The dispatchers already kept the in-flight lv2 syscall number (g_sc_inflight)
 # and HLE import name (g_hle_inflight) per guest thread id; now the syscall's first arguments and
 # both start times are kept too, and the dump prints "in sys N(r3,r4,r5) 12.3 s" / "in <hle> 4.0 s".
@@ -5481,7 +5481,7 @@ edit(PPT,
 # devpad: controller input for development tools, in memory (no file polling), port 0 only.
 #  - inject: ps3_devpad_press(mask, polls, lx, ly, rx, ry): hold buttons (PAD_SCRIPT mask encoding,
 #    DIGITAL2 << 8 | DIGITAL1) and the sticks (0..255, 128 centred; -1 leaves a stick alone) for
-#    `polls` reads of the pad. The PS5 debug server's `pad` command drives it.
+#    `polls` reads of the pad. The PS5 debugger's `pad` command drives it.
 #  - record: ps3_devpad_record(path) writes every change of the final pad state (the player's and
 #    anything injected) as "t_ms d1 d2 lx ly rx ry"; ps3_devpad_record(NULL) stops.
 #  - replay: ps3_devpad_replay(path) plays such a file back from now (time-based), on top of the
@@ -8539,7 +8539,7 @@ int64_t sys_event_queue_receive(ppu_context* ctx)
 # devpad replay env: PS3_DEVPAD_REPLAY=<file.pad> replays a controller recording ("t d1 d2 lx ly
 # rx ry", ms) from the first pad poll + PS3_DEVPAD_REPLAY_AT seconds (default 0), so a console run's
 # input (work/live/if1_live_1103_fps/pad/fps1103.pad) can be re-driven on the BC-250 without the
-# debug server. Unset = no replay (old).
+# debugger. Unset = no replay (old).
 edit("libs/input/cellPad.c",
      '''    /* devpad: injected presses and a replay, then the recorder (port 0) */
     if (port_no == 0) {''',

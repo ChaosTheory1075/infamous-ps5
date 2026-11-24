@@ -2,7 +2,7 @@
 # devpad replay env: PS3_DEVPAD_REPLAY=<file.pad> replays a controller recording ("t d1 d2 lx ly
 # rx ry", ms) from the first pad poll + PS3_DEVPAD_REPLAY_AT seconds (default 0), so a console run's
 # input (work/live/if1_live_1103_fps/pad/fps1103.pad) can be re-driven on the BC-250 without the
-# debug server. Unset = no replay (old).
+# debugger. Unset = no replay (old).
 edit("libs/input/cellPad.c",
      '''    /* devpad: injected presses and a replay, then the recorder (port 0) */
     if (port_no == 0) {''',

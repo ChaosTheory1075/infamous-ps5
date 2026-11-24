@@ -1,0 +1,2172 @@
+{
+ "generated_by": "tools/gpatch/gen_catalog.py",
+ "env": "PS3_GPATCH=<id>,<id>,...",
+ "ini_key": "gameplay_patches",
+ "ppu_hash": {
+  "if1": "d0c3e2a107c47d20d3316325ce6f75464a8f4f1d",
+  "if2": "41a7d047c573c78c0307506c9d1b52d15a66e4f5",
+  "fob": "4f5ef92b0175310104dc0c1dd7f9d0f387c818ea"
+ },
+ "toggles": [
+  {
+   "id": "if2_skip_intro",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 0,
+   "display_name": "Skip intro movie",
+   "description": "The splash movie at start-up is skipped.",
+   "author": "FlexBy",
+   "source": "community mods archive/patch.yml (RPCS3):54714",
+   "category": "misc",
+   "kind": "data",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "low: the launcher SKIP INTRO setting does the same through PS3_SKIP_MOVIES",
+   "default": false,
+   "sites": [],
+   "data": [
+    {
+     "addr": "0x007CDBA8",
+     "width": 4,
+     "value": "0x00000000",
+     "original": "0x73706C61"
+    }
+   ],
+   "evidence": "",
+   "translation": "be32 0x007CDBA8 = 0: the first word of the movie name \"splash_%s\" in rodata, so the name is empty."
+  },
+  {
+   "id": "if2_extended_fov",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 1,
+   "display_name": "Extended FOV",
+   "description": "Wider field of view.",
+   "author": "illusion",
+   "source": "community mods archive/patch.yml (RPCS3):54721",
+   "category": "camera",
+   "kind": "data",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "medium: in our EBOOT the word holds the integer 4, not a float (the patch comment: game settings may need \"li\" instead); reproduced as published, check the picture",
+   "default": false,
+   "sites": [],
+   "data": [
+    {
+     "addr": "0x0096DE14",
+     "width": 4,
+     "value": "0x3F266666",
+     "original": "0x00000004"
+    }
+   ],
+   "evidence": "",
+   "translation": "bef32 0x0096DE14 = 0.65."
+  },
+  {
+   "id": "if2_no_mesh_trim",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 2,
+   "display_name": "Disable mesh trimming",
+   "description": "Stops distant meshes being trimmed at resolutions above the PS3's.",
+   "author": "Yahfz",
+   "source": "community mods archive/patch.yml (RPCS3):54728",
+   "category": "visuals",
+   "kind": "data",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "low (visual)",
+   "default": false,
+   "sites": [],
+   "data": [
+    {
+     "addr": "0x008875C0",
+     "width": 4,
+     "value": "0x4020007F",
+     "original": "0x21000984"
+    }
+   ],
+   "evidence": "",
+   "translation": "be32 0x008875C0 = 0x4020007F (a table word in .data)."
+  },
+  {
+   "id": "if2_expand_pack_buffer",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 3,
+   "display_name": "Expand pack buffer",
+   "description": "Bigger streaming buffer for asset packs (121 MB to 132 MB).",
+   "author": "L_ (copy: bungholio (remix by STALKER))",
+   "source": "community patches (inFAMOUS 2)/imported_patch.yml:4 / community mods archive/imported_patch.yml:191",
+   "category": "fix",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "medium: 11 MB more guest memory for the pack buffer; check the boot log for allocation failures",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x000DD900",
+     "original": "lis r26/r3/r28,0x0790 (3 words)",
+     "patched": "lis r26/r3/r28,0x0840"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "3 statements `rN = (int32)(0x790 << 16)` -> `0x840 << 16` (r26, r3, r28)."
+  },
+  {
+   "id": "if2_thrusters_fast",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 4,
+   "display_name": "Static Thrusters - Fast (2000)",
+   "description": "Gliding with Static Thrusters is faster (forward speed 1350 to 2000).",
+   "author": "L_",
+   "source": "community patches (inFAMOUS 2)/imported_patch.yml:67",
+   "category": "movement",
+   "kind": "hook",
+   "requires": [
+    "in game: the Improved Static Thrusters upgrade"
+   ],
+   "conflicts": [
+    "if2_thrusters_fast_2555"
+   ],
+   "conflict_group": "if2_thr_fast",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0019B2EC",
+     "original": "lfs f1,-0x7FD4(r30)  (pool float 1350.0)",
+     "patched": "b cave: lis r9,0x76; lfs f1,-0x5A0(r9) (=2000.0); b 0x19B298"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "the lfs statement -> r9 = 0x760000; f1 = 2000.0f; the following `goto loc_0019B298` is the cave's branch back."
+  },
+  {
+   "id": "if2_thrusters_fast_2555",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 5,
+   "display_name": "Static Thrusters - Fast (2555)",
+   "description": "Gliding with Static Thrusters is much faster (forward speed 1350 to 2555).",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:253",
+   "category": "movement",
+   "kind": "hook",
+   "requires": [
+    "in game: the Improved Static Thrusters upgrade"
+   ],
+   "conflicts": [
+    "if2_thrusters_fast"
+   ],
+   "conflict_group": "if2_thr_fast",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0019B2EC",
+     "original": "lfs f1,-0x7FD4(r30)",
+     "patched": "cave as above with 2555.0"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "as if2_thrusters_fast, f1 = 2555.0f."
+  },
+  {
+   "id": "if2_thrusters_flight",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 6,
+   "display_name": "Static Thrusters - Flight",
+   "description": "While gliding: hold Cross to rise, Circle to sink (rise 600, sink 1200).",
+   "author": "L_",
+   "source": "community patches (inFAMOUS 2)/imported_patch.yml:14",
+   "category": "movement",
+   "kind": "hook",
+   "requires": [
+    "in game: the Improved Static Thrusters upgrade"
+   ],
+   "conflicts": [
+    "if2_thrusters_flight_fast"
+   ],
+   "conflict_group": "if2_thr_flight",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0019B388",
+     "original": "lwz r9,-0x7FC8(r30); lvx v0; vspltw v2 (the {-1000,0,0,0} lift vector)",
+     "patched": "b cave: r9 = table {5.5,0,0,0}; pad = *(0x009A4CC0); buttons = pad+0x1C; Cross 0x20 -> +16 {600 x4}, Circle 0x80 -> +32 {-1200 x4}; lvx v2,0,r9; b 0x19B374"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "lwz statement -> native cave: r9/r10/r11/r12 and cr0 as the cave leaves them, v2 = the 16 table bytes (big-endian, no splat), then `goto loc_0019B374`. The 12 floats and the two masks are constants in the native code instead of the cave's rodata copy (nothing else reads those bytes); the pad is read from guest memory exactly as the cave does."
+  },
+  {
+   "id": "if2_thrusters_flight_fast",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 7,
+   "display_name": "Static Thrusters - Flight (fast)",
+   "description": "While gliding: hold Cross to rise, Circle to sink, faster (rise 1555, sink 2555).",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:201",
+   "category": "movement",
+   "kind": "hook",
+   "requires": [
+    "in game: the Improved Static Thrusters upgrade"
+   ],
+   "conflicts": [
+    "if2_thrusters_flight"
+   ],
+   "conflict_group": "if2_thr_flight",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0019B388",
+     "original": "as if2_thrusters_flight",
+     "patched": "table 1555 / -2555"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "as if2_thrusters_flight with the other table."
+  },
+  {
+   "id": "if2_black_lightning",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 8,
+   "display_name": "Black Lightning",
+   "description": "Cole's lightning is drawn black (colour patch).",
+   "author": "L_ (copy: bungholio (remix by STALKER))",
+   "source": "community patches (inFAMOUS 2)/imported_patch.yml:80 / community mods archive/imported_patch.yml:265",
+   "category": "visuals",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "medium: calls a game function from a new place (as the cave does)",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x002CFA3C",
+     "original": "bl 0x2BB874",
+     "patched": "bl wrapper: if *(*(r3+0x14)+0x11C)==0 and g=*(0xA80104)!=0 and q=func_002F96AC(g)!=0 and *(q+0x60)>0: r5=*(q+0x60), r6=*(q+0x5C), r7=g; then bl 0x2BB874"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "the call statement -> the wrapper inline: stack frame (stdu -176, LR save, r3-r9 saved at +112..+160), the tests with cr7 as the cave sets it, `func_002F96AC(ctx); DRAIN_TRAMPOLINE`, r3/r4/r8/r9 (or all of r3-r9) reloaded, `func_002BB874(ctx); DRAIN_TRAMPOLINE`, frame popped."
+  },
+  {
+   "id": "if2_karma_instant",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 9,
+   "display_name": "Instant karma change",
+   "description": "Karma jumps instead of moving gradually.",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:82",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "high: author \"BETA BROKEN, can mess up progress unlocks\"",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0012FE34",
+     "original": "fadds f1,f1,f0",
+     "patched": "fsubs f1,f1,f0"
+    },
+    {
+     "addr": "0x0012FE58",
+     "original": "bl 0x12D4F0",
+     "patched": "nop"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "fadd statement -> fsub; the call statement dropped."
+  },
+  {
+   "id": "if2_karma_frozen",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 10,
+   "display_name": "Karma never changes",
+   "description": "Nothing changes Cole's karma.",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:93",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "medium: story karma choices stop counting",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0012FE50",
+     "original": "bl 0x12F6E0",
+     "patched": "nop"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "the call statement dropped."
+  },
+  {
+   "id": "if2_no_harm_reaction",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 11,
+   "display_name": "Cole does not react to harm",
+   "description": "Cole ignores hits (no stagger).",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:103",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [
+    "if2_cole_never_dies (author: without it the screen goes black where Cole would die)"
+   ],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "medium",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0017AC7C",
+     "original": "stw r0,0(r28)",
+     "patched": "nop"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "the store statement dropped."
+  },
+  {
+   "id": "if2_enemies_never_attack",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 12,
+   "display_name": "Most enemies never attack",
+   "description": "Most enemies stop attacking.",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:133",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "high: author \"BETA BROKEN CRASH\"",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x001F475C",
+     "original": "bl 0x1F5AB8; nop; lis r0,0xBF80",
+     "patched": "b 0x1F4764 (jump); ...; lis r0,0"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "the call and the nop skipped (no LR change, as the branch), r0 = 0."
+  },
+  {
+   "id": "if2_attacks_free",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 13,
+   "display_name": "Attacks cost no electricity",
+   "description": "Electric attacks and sniper zoom do not drain energy.",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:154",
+   "category": "powers",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x00154DAC",
+     "original": "stfs f13,0x1F68(r9)",
+     "patched": "nop"
+    },
+    {
+     "addr": "0x00155F18",
+     "original": "stfs f0,0x1F68(r3)",
+     "patched": "nop"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "both energy stores dropped (the patch's \"jump\" to itself at 0x154DAC is overwritten by the nop that follows it in the list)."
+  },
+  {
+   "id": "if2_cole_never_dies",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 14,
+   "display_name": "Cole never dies",
+   "description": "Cole's health is set to a huge value whenever it is checked.",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:164",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0017AC50",
+     "original": "lfs f13,0x7F0(r9); clrldi r26,r27,32; fcmpu cr7,f13,f0",
+     "patched": "lis r0,0x7F7F; stw r0,0x7EC(r9); stw r0,0x7F0(r9)"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "3 statements -> r0 = 0x7F7F0000; store it at r9+0x7EC and r9+0x7F0 (f13, r26 and cr7 are not written, as in the patch)."
+  },
+  {
+   "id": "if2_karma_evil_only",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 15,
+   "display_name": "Only evil karma",
+   "description": "Karma can only move towards evil.",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:172",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [
+    "if2_karma_good_only"
+   ],
+   "conflict_group": "if2_karma_side",
+   "bundle_members": [],
+   "risk": "high: author \"BETA BROKEN, can mess up progress unlocks\"",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0012FE68",
+     "original": "fcmpu cr7,f30,f0",
+     "patched": "b 0x12FF28"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "the compare -> `goto loc_0012FEA8` (0x12FF28 holds `b 0x12FEA8`; 0x12FF28 has no label)."
+  },
+  {
+   "id": "if2_karma_good_only",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 16,
+   "display_name": "Only good karma",
+   "description": "Karma can only move towards good.",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:181",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [
+    "if2_karma_evil_only"
+   ],
+   "conflict_group": "if2_karma_side",
+   "bundle_members": [],
+   "risk": "high: author \"BETA BROKEN, can mess up progress unlocks\"",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0012FE68",
+     "original": "fcmpu cr7,f30,f0",
+     "patched": "nop"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "the compare dropped (the next branch reads cr7 as left before)."
+  },
+  {
+   "id": "if2_mod_pack_plus2",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 17,
+   "display_name": "Mod pack PLUS2",
+   "description": "All of: no harm reaction, karma frozen, nothing can die, AI x2 speed, jump x10, free attacks, Cole never dies.",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:318",
+   "category": "difficulty/cheat",
+   "kind": "bundle",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [
+    "if2_no_harm_reaction",
+    "if2_karma_frozen",
+    "if2_nothing_can_die",
+    "if2_ai_speed_x2",
+    "if2_jump_x10",
+    "if2_attacks_free",
+    "if2_cole_never_dies"
+   ],
+   "risk": "high (sum of the members)",
+   "default": false,
+   "sites": [],
+   "data": [],
+   "evidence": "",
+   "translation": "its 10 words are exactly the words of the 7 member patches."
+  },
+  {
+   "id": "if2_ai_speed_x2",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 18,
+   "display_name": "AI movement speed x2",
+   "description": "People and enemies move twice as fast.",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:334",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x001D99BC",
+     "original": "lis r6,0x3F80 (1.0)",
+     "patched": "lis r6,0x4000 (2.0)"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "immediate 0x3F80 -> 0x4000."
+  },
+  {
+   "id": "if2_jump_x10",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 19,
+   "display_name": "Jump height x10",
+   "description": "Cole jumps 10 times as high.",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:348",
+   "category": "movement",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [
+    "if2_jump_x2",
+    "if2_jump_x5"
+   ],
+   "conflict_group": "if2_jump",
+   "bundle_members": [],
+   "risk": "medium (x10: long falls)",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0022A104",
+     "original": "lis r0,0x3F80 (1.0)",
+     "patched": "lis r0,0x4120 (10)"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "immediate 0x3F80 -> 0x4120."
+  },
+  {
+   "id": "if2_jump_x2",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 20,
+   "display_name": "Jump height x2",
+   "description": "Cole jumps 2 times as high.",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:358",
+   "category": "movement",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [
+    "if2_jump_x10",
+    "if2_jump_x5"
+   ],
+   "conflict_group": "if2_jump",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0022A104",
+     "original": "lis r0,0x3F80 (1.0)",
+     "patched": "lis r0,0x4000 (2)"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "immediate 0x3F80 -> 0x4000."
+  },
+  {
+   "id": "if2_jump_x5",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 21,
+   "display_name": "Jump height x5",
+   "description": "Cole jumps 5 times as high.",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:368",
+   "category": "movement",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [
+    "if2_jump_x10",
+    "if2_jump_x2"
+   ],
+   "conflict_group": "if2_jump",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0022A104",
+     "original": "lis r0,0x3F80 (1.0)",
+     "patched": "lis r0,0x40A0 (5)"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "immediate 0x3F80 -> 0x40A0."
+  },
+  {
+   "id": "if2_karma_fast",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 22,
+   "display_name": "Very fast karma gain and loss",
+   "description": "Karma moves very fast.",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:381",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "high: removes a stack frame (guest stack corruption in the original too); author \"BETA BROKEN, can mess up progress unlocks\"",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x00129724",
+     "original": "stdu r1,-0xD0(r1)",
+     "patched": "nop"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "the frame push dropped: the function then saves into and pops from its caller's frame, exactly as on RPCS3."
+  },
+  {
+   "id": "if2_nothing_can_die",
+   "games": [
+    "if2"
+   ],
+   "flag_index": 23,
+   "display_name": "Nothing can die",
+   "description": "Characters should not die (author: no effect).",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:391",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "low (author: \"BETA NO EFFECT\")",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0034E8E4",
+     "original": "stw r0,4(r31)",
+     "patched": "nop"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "the store dropped."
+  },
+  {
+   "id": "fob_skip_intro",
+   "games": [
+    "fob"
+   ],
+   "flag_index": 0,
+   "display_name": "Skip intro movie",
+   "description": "The splash movies at start-up are skipped.",
+   "author": "FlexBy",
+   "source": "community mods archive/patch.yml (RPCS3):67607 / community mods archive/imported_patch.yml:585",
+   "category": "misc",
+   "kind": "data",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "low: same as the launcher SKIP INTRO",
+   "default": false,
+   "sites": [],
+   "data": [
+    {
+     "addr": "0x00812BA0",
+     "width": 4,
+     "value": "0x00000000",
+     "original": "0x73706C61"
+    },
+    {
+     "addr": "0x00812BB0",
+     "width": 4,
+     "value": "0x00000000",
+     "original": "0x73706C61"
+    }
+   ],
+   "evidence": "",
+   "translation": "be32 0 over the first words of \"splash_fob_%s\" and \"splash_%s\"."
+  },
+  {
+   "id": "fob_no_mesh_trim",
+   "games": [
+    "fob"
+   ],
+   "flag_index": 1,
+   "display_name": "Disable mesh trimming",
+   "description": "Stops distant meshes being trimmed at resolutions above the PS3's.",
+   "author": "Pappapatu",
+   "source": "community mods archive/patch.yml (RPCS3):67617",
+   "category": "visuals",
+   "kind": "data",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "low (visual)",
+   "default": false,
+   "sites": [],
+   "data": [
+    {
+     "addr": "0x008CF5F8",
+     "width": 4,
+     "value": "0x4020007F",
+     "original": "0x21000984"
+    }
+   ],
+   "evidence": "",
+   "translation": "be32 0x008CF5F8 = 0x4020007F (same table word as inFAMOUS 2, original 0x21000984 in both)."
+  },
+  {
+   "id": "fob_cole_never_dies",
+   "games": [
+    "fob"
+   ],
+   "flag_index": 2,
+   "display_name": "Cole never dies",
+   "description": "Cole's health is set to a huge value whenever it is checked.",
+   "author": "chidreams",
+   "source": "community mods archive/imported_patch.yml:561",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0018A438",
+     "original": "lfs f13,0x7F0(r9); clrldi; fcmpu",
+     "patched": "lis r0,0x7F7F; stw r0,0x7EC(r9); stw r0,0x7F0(r9)"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "as if2_cole_never_dies."
+  },
+  {
+   "id": "fob_infinite_electricity",
+   "games": [
+    "fob"
+   ],
+   "flag_index": 3,
+   "display_name": "Infinite electricity",
+   "description": "Using powers adds energy instead of draining it.",
+   "author": "Hiei-YYH",
+   "source": "community mods archive/imported_patch.yml:574",
+   "category": "powers",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0015D190",
+     "original": "fsubs f13,f13,f0",
+     "patched": "fadds f13,f13,f0"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "fsub statement -> fadd."
+  },
+  {
+   "id": "fob_expand_pack_buffer",
+   "games": [
+    "fob"
+   ],
+   "flag_index": 4,
+   "display_name": "Expand pack buffer",
+   "description": "Bigger streaming buffer for asset packs (121 MB to 132 MB).",
+   "author": "FlexBy (L_'s inFAMOUS 2 patch)",
+   "source": "community mods archive/imported_patch.yml:732",
+   "category": "fix",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "medium: 11 MB more guest memory",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x000E2798",
+     "original": "lis r26/r3/r28,0x0790",
+     "patched": "lis ...,0x0840"
+    }
+   ],
+   "data": [],
+   "evidence": "the FoB block writes if2 address 0xDD900 (FoB holds lwz there); the 3 lis 0x0790 words are at FoB 0x000E2798, 9-word context identical to if2 0xDD8F0..",
+   "translation": "as if2_expand_pack_buffer."
+  },
+  {
+   "id": "fob_thrusters_fast",
+   "games": [
+    "fob"
+   ],
+   "flag_index": 5,
+   "display_name": "Static Thrusters - Fast",
+   "description": "Gliding with Static Thrusters is much faster (1350 to 2555).",
+   "author": "FlexBy (bungholio (remix by STALKER) values)",
+   "source": "community mods archive/imported_patch.yml:798",
+   "category": "movement",
+   "kind": "hook",
+   "requires": [
+    "in game: the Improved Static Thrusters upgrade"
+   ],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x001AB24C",
+     "original": "lfs f1,-0x7FD4(r30)",
+     "patched": "cave: f1 = 2555.0; b 0x1AB1F8"
+    }
+   ],
+   "data": [],
+   "evidence": "if2 0x19B2EC -> FoB 0x1AB24C: the getter func_001AB1D4 is word-identical to if2 func_0019B274 (TOC slot 0x9EEBA0 = 1350.0 like if2 0x9A4E88)",
+   "translation": "as if2_thrusters_fast_2555, `goto loc_001AB1F8` kept."
+  },
+  {
+   "id": "fob_thrusters_flight",
+   "games": [
+    "fob"
+   ],
+   "flag_index": 6,
+   "display_name": "Static Thrusters - Flight",
+   "description": "While gliding: hold Cross to rise, Circle to sink (1555 / 2555).",
+   "author": "FlexBy (bungholio (remix by STALKER) values)",
+   "source": "community mods archive/imported_patch.yml:744",
+   "category": "movement",
+   "kind": "hook",
+   "requires": [
+    "in game: the Improved Static Thrusters upgrade"
+   ],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x001AB2E8",
+     "original": "lwz r9,-0x7FC8(r30); lvx; vspltw",
+     "patched": "cave as if2, pad slot 0x009EE9D8"
+    }
+   ],
+   "data": [],
+   "evidence": "if2 0x19B388 -> FoB 0x1AB2E8 (func_001AB2B0 word-identical); the pad slot: if2 0x009A4CC0 (-> 0xA73130) is loaded by if2 0x1967CC (lwz r9,-0x7FCC(r30), r30 = TOC-0x7D30); its FoB twin 0x1A6730 (16/17 words) loads FoB slot 0x009EE9D8 (-> 0xAC1DF0)",
+   "translation": "as if2_thrusters_flight with slot 0x009EE9D8 and `goto loc_001AB2D4`."
+  },
+  {
+   "id": "fob_black_lightning",
+   "games": [
+    "fob"
+   ],
+   "flag_index": 7,
+   "display_name": "Black Lightning",
+   "description": "Cole's lightning is drawn black (colour patch).",
+   "author": "FlexBy (L_'s inFAMOUS 2 patch)",
+   "source": "community mods archive/imported_patch.yml:812",
+   "category": "visuals",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "medium: the object offsets +0x11C/+0x5C/+0x60 are assumed unchanged in FoB (some other offsets in this function moved by 4/16)",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x002E6340",
+     "original": "bl 0x2D2108",
+     "patched": "wrapper as if2 with func_00310C10 and global 0x00ACEE74"
+    }
+   ],
+   "data": [],
+   "evidence": "call if2 0x2CFA3C -> FoB 0x2E6340 (16/17 words); callees if2 0x2BB874 -> 0x2D2108 and 0x2F96AC -> 0x310C10 (exact); global if2 0xA80104 (slot 0x9AFB40, loaded at if2 0x49A90C) -> FoB slot 0x9FA01C (loaded at the exact twin 0x4CAD00) = 0xACEE74; the call's own setup reads +0x14/+0x120 at the same offsets in both games",
+   "translation": "as if2_black_lightning; lis r11,0xAD / lwz -0x118C(r11) stands for the cave's lis 0xA8 / 0x104."
+  },
+  {
+   "id": "if1_skip_intro",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 0,
+   "display_name": "Skip intro movie",
+   "description": "The splash movie at start-up is skipped.",
+   "author": "FlexBy",
+   "source": "community mods archive/patch.yml (RPCS3):67371",
+   "category": "misc",
+   "kind": "data",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "low: same as the launcher SKIP INTRO",
+   "default": false,
+   "sites": [],
+   "data": [
+    {
+     "addr": "0x005B5320",
+     "width": 4,
+     "value": "0x00000000",
+     "original": "0x00730070"
+    }
+   ],
+   "evidence": "",
+   "translation": "be32 0 over the first two UTF-16 chars of L\"splash_%s\"."
+  },
+  {
+   "id": "if1_no_mesh_trim",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 1,
+   "display_name": "Disable mesh trimming",
+   "description": "Stops distant meshes being trimmed at resolutions above the PS3's.",
+   "author": "Yahfz",
+   "source": "community mods archive/patch.yml (RPCS3):67385",
+   "category": "visuals",
+   "kind": "data",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "low (visual)",
+   "default": false,
+   "sites": [],
+   "data": [
+    {
+     "addr": "0x00614220",
+     "width": 4,
+     "value": "0x35000000",
+     "original": "0x1C450191"
+    }
+   ],
+   "evidence": "",
+   "translation": "be32 0x00614220 = 0x35000000."
+  },
+  {
+   "id": "if1_fov_1_4",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 2,
+   "display_name": "FOV 1.4 (narrower)",
+   "description": "Narrower field of view (factor 1.4; 1.0 is the game's; lower = wider).",
+   "author": "Hasster",
+   "source": "community mods archive/patch.yml (RPCS3):67363",
+   "category": "camera",
+   "kind": "data",
+   "requires": [],
+   "conflicts": [
+    "if1_fov_1_2",
+    "if1_fov_1_1",
+    "if1_fov_0_9",
+    "if1_fov_0_8",
+    "if1_fov_0_6"
+   ],
+   "conflict_group": "if1_fov",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [],
+   "data": [
+    {
+     "addr": "0x007854DC",
+     "width": 4,
+     "value": "0x3FB33333",
+     "original": "0x3F800000"
+    }
+   ],
+   "evidence": "",
+   "translation": "be32 0x007854DC = 0x3FB33333 (one of the patch's \"FOV\" values)."
+  },
+  {
+   "id": "if1_fov_1_2",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 3,
+   "display_name": "FOV 1.2 (narrower)",
+   "description": "Narrower field of view (factor 1.2; 1.0 is the game's; lower = wider).",
+   "author": "Hasster",
+   "source": "community mods archive/patch.yml (RPCS3):67363",
+   "category": "camera",
+   "kind": "data",
+   "requires": [],
+   "conflicts": [
+    "if1_fov_1_4",
+    "if1_fov_1_1",
+    "if1_fov_0_9",
+    "if1_fov_0_8",
+    "if1_fov_0_6"
+   ],
+   "conflict_group": "if1_fov",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [],
+   "data": [
+    {
+     "addr": "0x007854DC",
+     "width": 4,
+     "value": "0x3F99999A",
+     "original": "0x3F800000"
+    }
+   ],
+   "evidence": "",
+   "translation": "be32 0x007854DC = 0x3F99999A (one of the patch's \"FOV\" values)."
+  },
+  {
+   "id": "if1_fov_1_1",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 4,
+   "display_name": "FOV 1.1 (narrower)",
+   "description": "Narrower field of view (factor 1.1; 1.0 is the game's; lower = wider).",
+   "author": "Hasster",
+   "source": "community mods archive/patch.yml (RPCS3):67363",
+   "category": "camera",
+   "kind": "data",
+   "requires": [],
+   "conflicts": [
+    "if1_fov_1_4",
+    "if1_fov_1_2",
+    "if1_fov_0_9",
+    "if1_fov_0_8",
+    "if1_fov_0_6"
+   ],
+   "conflict_group": "if1_fov",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [],
+   "data": [
+    {
+     "addr": "0x007854DC",
+     "width": 4,
+     "value": "0x3F8CCCCD",
+     "original": "0x3F800000"
+    }
+   ],
+   "evidence": "",
+   "translation": "be32 0x007854DC = 0x3F8CCCCD (one of the patch's \"FOV\" values)."
+  },
+  {
+   "id": "if1_fov_0_9",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 5,
+   "display_name": "FOV 0.9 (wider)",
+   "description": "Wider field of view (factor 0.9; 1.0 is the game's; lower = wider).",
+   "author": "Hasster",
+   "source": "community mods archive/patch.yml (RPCS3):67363",
+   "category": "camera",
+   "kind": "data",
+   "requires": [],
+   "conflicts": [
+    "if1_fov_1_4",
+    "if1_fov_1_2",
+    "if1_fov_1_1",
+    "if1_fov_0_8",
+    "if1_fov_0_6"
+   ],
+   "conflict_group": "if1_fov",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [],
+   "data": [
+    {
+     "addr": "0x007854DC",
+     "width": 4,
+     "value": "0x3F666666",
+     "original": "0x3F800000"
+    }
+   ],
+   "evidence": "",
+   "translation": "be32 0x007854DC = 0x3F666666 (one of the patch's \"FOV\" values)."
+  },
+  {
+   "id": "if1_fov_0_8",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 6,
+   "display_name": "FOV 0.8 (wider)",
+   "description": "Wider field of view (factor 0.8; 1.0 is the game's; lower = wider).",
+   "author": "Hasster",
+   "source": "community mods archive/patch.yml (RPCS3):67363",
+   "category": "camera",
+   "kind": "data",
+   "requires": [],
+   "conflicts": [
+    "if1_fov_1_4",
+    "if1_fov_1_2",
+    "if1_fov_1_1",
+    "if1_fov_0_9",
+    "if1_fov_0_6"
+   ],
+   "conflict_group": "if1_fov",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [],
+   "data": [
+    {
+     "addr": "0x007854DC",
+     "width": 4,
+     "value": "0x3F4CCCCD",
+     "original": "0x3F800000"
+    }
+   ],
+   "evidence": "",
+   "translation": "be32 0x007854DC = 0x3F4CCCCD (one of the patch's \"FOV\" values)."
+  },
+  {
+   "id": "if1_fov_0_6",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 7,
+   "display_name": "FOV 0.6 (wider)",
+   "description": "Wider field of view (factor 0.6; 1.0 is the game's; lower = wider).",
+   "author": "Hasster",
+   "source": "community mods archive/patch.yml (RPCS3):67363",
+   "category": "camera",
+   "kind": "data",
+   "requires": [],
+   "conflicts": [
+    "if1_fov_1_4",
+    "if1_fov_1_2",
+    "if1_fov_1_1",
+    "if1_fov_0_9",
+    "if1_fov_0_8"
+   ],
+   "conflict_group": "if1_fov",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [],
+   "data": [
+    {
+     "addr": "0x007854DC",
+     "width": 4,
+     "value": "0x3F19999A",
+     "original": "0x3F800000"
+    }
+   ],
+   "evidence": "",
+   "translation": "be32 0x007854DC = 0x3F19999A (one of the patch's \"FOV\" values)."
+  },
+  {
+   "id": "if1_blur_bloom_fix",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 8,
+   "display_name": "High-resolution blur and bloom fix",
+   "description": "Smoother blur and bloom at higher resolutions (sample offsets cut to a third).",
+   "author": "artofaria",
+   "source": "community mods archive/patch.yml (RPCS3):67545 (BCUS98119) / community mods archive/imported_patch.yml:1137",
+   "category": "visuals",
+   "kind": "data",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "low (visual)",
+   "default": false,
+   "sites": [],
+   "data": [
+    {
+     "addr": "0x0076270C",
+     "width": 4,
+     "value": "0xBF8DD2F1",
+     "original": "0xC054BC6A"
+    },
+    {
+     "addr": "0x00762714",
+     "width": 4,
+     "value": "0xBEF30783",
+     "original": "0xBFB645A2"
+    },
+    {
+     "addr": "0x0076271C",
+     "width": 4,
+     "value": "0x3E222222",
+     "original": "0x3EF33333"
+    },
+    {
+     "addr": "0x00762724",
+     "width": 4,
+     "value": "0x3FAAAAAB",
+     "original": "0x40800000"
+    },
+    {
+     "addr": "0x0076272C",
+     "width": 4,
+     "value": "0x3F4AAAAB",
+     "original": "0x40180000"
+    },
+    {
+     "addr": "0x00786808",
+     "width": 4,
+     "value": "0xBDAAAAAB",
+     "original": "0xBE800000"
+    },
+    {
+     "addr": "0x0078680C",
+     "width": 4,
+     "value": "0xBDAAAAAB",
+     "original": "0xBE800000"
+    },
+    {
+     "addr": "0x00786814",
+     "width": 4,
+     "value": "0x3DAAAAAB",
+     "original": "0x3E800000"
+    },
+    {
+     "addr": "0x00786818",
+     "width": 4,
+     "value": "0xBDAAAAAB",
+     "original": "0xBE800000"
+    },
+    {
+     "addr": "0x00786820",
+     "width": 4,
+     "value": "0xBDAAAAAB",
+     "original": "0xBE800000"
+    },
+    {
+     "addr": "0x00786824",
+     "width": 4,
+     "value": "0x3DAAAAAB",
+     "original": "0x3E800000"
+    },
+    {
+     "addr": "0x0078682C",
+     "width": 4,
+     "value": "0x3DAAAAAB",
+     "original": "0x3E800000"
+    },
+    {
+     "addr": "0x00786830",
+     "width": 4,
+     "value": "0x3DAAAAAB",
+     "original": "0x3E800000"
+    },
+    {
+     "addr": "0x0078683C",
+     "width": 4,
+     "value": "0x3DAAAAAB",
+     "original": "0x3E800000"
+    },
+    {
+     "addr": "0x00786840",
+     "width": 4,
+     "value": "0x3DAAAAAB",
+     "original": "0x3E800000"
+    },
+    {
+     "addr": "0x00786848",
+     "width": 4,
+     "value": "0xBDAAAAAB",
+     "original": "0xBE800000"
+    },
+    {
+     "addr": "0x0078684C",
+     "width": 4,
+     "value": "0x3DAAAAAB",
+     "original": "0x3E800000"
+    },
+    {
+     "addr": "0x00786854",
+     "width": 4,
+     "value": "0x3DAAAAAB",
+     "original": "0x3E800000"
+    },
+    {
+     "addr": "0x00786858",
+     "width": 4,
+     "value": "0xBDAAAAAB",
+     "original": "0xBE800000"
+    },
+    {
+     "addr": "0x00786860",
+     "width": 4,
+     "value": "0xBDAAAAAB",
+     "original": "0xBE800000"
+    },
+    {
+     "addr": "0x00786864",
+     "width": 4,
+     "value": "0xBDAAAAAB",
+     "original": "0xBE800000"
+    },
+    {
+     "addr": "0x00786870",
+     "width": 4,
+     "value": "0x3E2AAAAB",
+     "original": "0x3F000000"
+    },
+    {
+     "addr": "0x00786874",
+     "width": 4,
+     "value": "0x3E2AAAAB",
+     "original": "0x3F000000"
+    },
+    {
+     "addr": "0x0078687C",
+     "width": 4,
+     "value": "0xBE2AAAAB",
+     "original": "0xBF000000"
+    },
+    {
+     "addr": "0x00786880",
+     "width": 4,
+     "value": "0x3E2AAAAB",
+     "original": "0x3F000000"
+    },
+    {
+     "addr": "0x00786888",
+     "width": 4,
+     "value": "0x3E2AAAAB",
+     "original": "0x3F000000"
+    },
+    {
+     "addr": "0x0078688C",
+     "width": 4,
+     "value": "0xBE2AAAAB",
+     "original": "0xBF000000"
+    },
+    {
+     "addr": "0x00786894",
+     "width": 4,
+     "value": "0xBE2AAAAB",
+     "original": "0xBF000000"
+    },
+    {
+     "addr": "0x00786898",
+     "width": 4,
+     "value": "0xBE2AAAAB",
+     "original": "0xBF000000"
+    }
+   ],
+   "evidence": "written for BCUS98119; moved to BCES00220 by +0x48 (0x7626xx) / +0x50 (0x7867xx), the same shifts as the speed-limit (+0x48) and refraction (+0x50) patches that exist for both builds; all 29 originals are 3x the patch values (checked by gen_catalog.py)",
+   "translation": "29 float words."
+  },
+  {
+   "id": "if1_infinite_health",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 9,
+   "display_name": "Infinite health",
+   "description": "Cole's health is refilled to maximum whenever he takes damage.",
+   "author": "Codex",
+   "source": "community patches (inFAMOUS)/imported_patch.yml:4 (NPUA80480)",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [
+    "if1_enemies_die_on_fall"
+   ],
+   "conflict_group": "if1_damage_site",
+   "bundle_members": [],
+   "risk": "low; r25 is the damaged character: if enemies also become unkillable, it is not Cole-only (the RPCS3 patch has the same property)",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0013FCAC",
+     "original": "lfs f3,-0x7FF0(r30); lfs f0,0x754(r25); fcmpu cr7,f0,f3; ble cr7,+0x2C0",
+     "patched": "lfs f0,0x750(r25); stfs f0,0x754(r25); lfs f3,-0x7FF0(r30); nop"
+    }
+   ],
+   "data": [],
+   "evidence": "written for NPUA80480 0x001405C4; the same 4 instructions are at BCES00220 0x0013FCAC (= -0x918), func_0013F994/0013F998 (2 copies)",
+   "translation": "4 statements -> f0 = max health (+0x750); store it to current health (+0x754); f3 = the pool float; branch dropped (cr7 untouched)."
+  },
+  {
+   "id": "if1_enemies_die_on_fall",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 10,
+   "display_name": "Enemies die after falling",
+   "description": "Knocked-down characters die (as published, including its typo).",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:1371 (BCUS98119)",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [
+    "if1_infinite_health"
+   ],
+   "conflict_group": "if1_damage_site",
+   "bundle_members": [],
+   "risk": "high: an author BETA cheat whose effect depends on a stale condition register; conflicts with if1_infinite_health (same instructions)",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0013FCAC",
+     "original": "lfs f3,-0x7FF0(r30); lfs f0,0x754(r25); fcmpu cr7,f0,f3; ble",
+     "patched": "lfs f0,0x750(r25); lfs f3,-0x7FF0(r30); nop; ble (kept)"
+    }
+   ],
+   "data": [],
+   "evidence": "BCUS 0x13FE24 = BCES 0x13FCAC (-0x178, the shift proven by Circular Stick 0x152538->0x1523C0 and Cole Is Invincible 0x147760->0x1475E8 in the same range); the patch writes 0x13FE28 twice, so the published effect is: f0 = max, f3 = pool float, the compare removed, the ble reads the cr7 left by `cmpwi cr7,r0,0` at 0x13FC8C",
+   "translation": "4 statements -> f0 = +0x750; f3 = pool float; (no compare); the original branch statement kept."
+  },
+  {
+   "id": "if1_all_powers",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 11,
+   "display_name": "All powers unlocked",
+   "description": "Every power is available.",
+   "author": "Scirvir",
+   "source": "community mods archive/patch.yml (RPCS3):67341",
+   "category": "powers",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "medium: the unlock bits are written into the save",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x002D59D8",
+     "original": "beq 0x2D5D88",
+     "patched": "nop"
+    },
+    {
+     "addr": "0x002D59E4",
+     "original": "ori r0,r0,1",
+     "patched": "ori r0,r0,0x7F (byte write 0x2D59E7)"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "the branch statement dropped; `r0 | 0x1` -> `r0 | 0x7F`."
+  },
+  {
+   "id": "if1_no_shadows",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 12,
+   "display_name": "Disable shadows",
+   "description": "No dynamic shadows (faster).",
+   "author": "FlexBy",
+   "source": "community mods archive/patch.yml (RPCS3):67378",
+   "category": "visuals",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "low (visual)",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x002578A8",
+     "original": "beq cr7,0x2578F8",
+     "patched": "beq cr7,0x257998"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "`goto loc_002578F8` -> `goto loc_00257998` under the same condition."
+  },
+  {
+   "id": "if1_disable_vfx",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 13,
+   "display_name": "Disable visual effects (experimental)",
+   "description": "Some shadows and lighting off, much faster in places; may glitch other effects.",
+   "author": "Hasster",
+   "source": "community mods archive/imported_patch.yml:867",
+   "category": "visuals",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "medium (author: may cause glitches)",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x00192F54",
+     "original": "bl 0x21D4B0",
+     "patched": "nop"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "the call statement dropped."
+  },
+  {
+   "id": "if1_unstable_vfx",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 14,
+   "display_name": "Unstable visual effects (experimental)",
+   "description": "Visual effects off; last resort for speed.",
+   "author": "Hasster",
+   "source": "community mods archive/imported_patch.yml:876",
+   "category": "visuals",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "medium (author: use only as the last resort)",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0021FA64",
+     "original": "b 0x21F6C4",
+     "patched": "nop"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "`goto loc_0021F6C4` dropped (falls through)."
+  },
+  {
+   "id": "if1_unstable_lighting",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 15,
+   "display_name": "Unstable lighting (experimental)",
+   "description": "Faster, but fire, lightning and some lights partly break.",
+   "author": "Hasster",
+   "source": "community mods archive/imported_patch.yml:885",
+   "category": "visuals",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "medium (author: partially breaks fire, lightning and lighting)",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x00253F6C",
+     "original": "b 0x253EEC",
+     "patched": "nop"
+    },
+    {
+     "addr": "0x00258110",
+     "original": "bne cr7,0x258148",
+     "patched": "nop"
+    }
+   ],
+   "data": [],
+   "evidence": "",
+   "translation": "both branch statements dropped."
+  },
+  {
+   "id": "if1_cole_invincible",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 16,
+   "display_name": "Cole is invincible",
+   "description": "Damage is never applied to Cole.",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:1381 (BCUS98119)",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x001475E8",
+     "original": "bl 0x13F998 (the damage routine)",
+     "patched": "nop"
+    }
+   ],
+   "data": [],
+   "evidence": "BCUS 0x147760 -> BCES 0x1475E8 (-0x178); the word there is `bl 0x13F998`, the routine Infinite Health patches",
+   "translation": "the call statement dropped."
+  },
+  {
+   "id": "if1_unlimited_electricity",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 17,
+   "display_name": "Unlimited electricity",
+   "description": "Energy stays full (as published).",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:1391 (BCUS98119)",
+   "category": "powers",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "medium: works through a stale register, as the original does",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x00124414",
+     "original": "fsubs f11,f0,f12",
+     "patched": "nop"
+    }
+   ],
+   "data": [],
+   "evidence": "BCUS 0x12458C -> BCES 0x124414 (-0x178): the energy clamp function (new = old + delta; clamp to max via fsel f11); the MOD PACK GIGA word for BCUS 0x124598 (stfs f12,8(r4)) lands on BCES 0x124420 `stfs f13,8(r4)` with the same shift",
+   "translation": "the fsub statement dropped: the clamp then selects with the stale f11 (as on RPCS3)."
+  },
+  {
+   "id": "if1_always_hero",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 18,
+   "display_name": "Always hero (good)",
+   "description": "Cole counts as good.",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:1401 (BCUS98119)",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [
+    "if1_always_infamous"
+   ],
+   "conflict_group": "if1_karma_side",
+   "bundle_members": [],
+   "risk": "medium: every caller of this range test gets 0",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0038B5B0",
+     "original": "mr r3,r9",
+     "patched": "li r3,0"
+    }
+   ],
+   "data": [],
+   "evidence": "BCUS 0x38B520 -> BCES 0x38B5B0 (+0x90, the shift of All powers 0x2D5948->0x2D59D8 and Brightness): the return-value move of the range test func_0038B568 (`mr r3,r9; extsw r3,r3; blr`)",
+   "translation": "r3 = r9 -> r3 = 0."
+  },
+  {
+   "id": "if1_always_infamous",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 19,
+   "display_name": "Always infamous (evil)",
+   "description": "Cole counts as evil.",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:1412 (BCUS98119)",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [
+    "if1_always_hero"
+   ],
+   "conflict_group": "if1_karma_side",
+   "bundle_members": [],
+   "risk": "medium: every caller of this range test gets 1 when the value is above the low end",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0038B5B0",
+     "original": "mr r3,r9",
+     "patched": "li r3,1"
+    }
+   ],
+   "data": [],
+   "evidence": "as if1_always_hero",
+   "translation": "r3 = r9 -> r3 = 1."
+  },
+  {
+   "id": "if1_no_ai",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 20,
+   "display_name": "No enemy AI",
+   "description": "Enemies never shoot and their AI is off.",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:1224 (BCUS98119)",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "low",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x002DAF1C",
+     "original": "ble cr7,+8",
+     "patched": "b +8"
+    },
+    {
+     "addr": "0x002DAF48",
+     "original": "stdu r1,-0x80(r1) (function entry)",
+     "patched": "blr"
+    }
+   ],
+   "data": [],
+   "evidence": "BCUS 0x2DAE8C/0x2DAEB8 -> BCES 0x2DAF1C/0x2DAF48 (+0x90): a `ble +8` (the patch makes it `b +8`) and a function entry (the patch returns at once)",
+   "translation": "`if (!gt) goto loc_002DAF24` -> `goto loc_002DAF24`; function entry -> `return;`."
+  },
+  {
+   "id": "if1_ai_speed_stand",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 21,
+   "display_name": "AI speed: stand still",
+   "description": "AI stands still (speed 0).",
+   "author": "STALKER",
+   "source": "community mods archive/imported_patch.yml:1176 (BCUS98119)",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [
+    "if1_ai_speed_x2",
+    "if1_ai_speed_back",
+    "if1_ai_speed_back_x2"
+   ],
+   "conflict_group": "if1_ai_speed",
+   "bundle_members": [],
+   "risk": "medium (located by its unique 1.0 constant; author BETA)",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0017E948",
+     "original": "lis r0,0x3F80 (1.0)",
+     "patched": "lis r0,0x0000"
+    }
+   ],
+   "data": [],
+   "evidence": "BCUS 0x17EAB0 -> BCES 0x17E948 (-0x168): the only `lis r0,0x3F80` within +-0x3000 (an object initialiser storing 1.0 at +0x2C)",
+   "translation": "immediate 0x3F80 -> 0x0000."
+  },
+  {
+   "id": "if1_ai_speed_x2",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 22,
+   "display_name": "AI speed: x2",
+   "description": "AI moves twice as fast.",
+   "author": "STALKER",
+   "source": "community mods archive/imported_patch.yml:1188 (BCUS98119)",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [
+    "if1_ai_speed_stand",
+    "if1_ai_speed_back",
+    "if1_ai_speed_back_x2"
+   ],
+   "conflict_group": "if1_ai_speed",
+   "bundle_members": [],
+   "risk": "medium (located by its unique 1.0 constant; author BETA)",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0017E948",
+     "original": "lis r0,0x3F80 (1.0)",
+     "patched": "lis r0,0x4000"
+    }
+   ],
+   "data": [],
+   "evidence": "BCUS 0x17EAB0 -> BCES 0x17E948 (-0x168): the only `lis r0,0x3F80` within +-0x3000 (an object initialiser storing 1.0 at +0x2C)",
+   "translation": "immediate 0x3F80 -> 0x4000."
+  },
+  {
+   "id": "if1_ai_speed_back",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 23,
+   "display_name": "AI speed: backwards",
+   "description": "AI moves backwards.",
+   "author": "STALKER",
+   "source": "community mods archive/imported_patch.yml:1200 (BCUS98119)",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [
+    "if1_ai_speed_stand",
+    "if1_ai_speed_x2",
+    "if1_ai_speed_back_x2"
+   ],
+   "conflict_group": "if1_ai_speed",
+   "bundle_members": [],
+   "risk": "medium (located by its unique 1.0 constant; author BETA)",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0017E948",
+     "original": "lis r0,0x3F80 (1.0)",
+     "patched": "lis r0,0xBF80"
+    }
+   ],
+   "data": [],
+   "evidence": "BCUS 0x17EAB0 -> BCES 0x17E948 (-0x168): the only `lis r0,0x3F80` within +-0x3000 (an object initialiser storing 1.0 at +0x2C)",
+   "translation": "immediate 0x3F80 -> 0xBF80."
+  },
+  {
+   "id": "if1_ai_speed_back_x2",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 24,
+   "display_name": "AI speed: backwards x2",
+   "description": "AI moves backwards, twice as fast.",
+   "author": "STALKER",
+   "source": "community mods archive/imported_patch.yml:1212 (BCUS98119)",
+   "category": "difficulty/cheat",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [
+    "if1_ai_speed_stand",
+    "if1_ai_speed_x2",
+    "if1_ai_speed_back"
+   ],
+   "conflict_group": "if1_ai_speed",
+   "bundle_members": [],
+   "risk": "medium (located by its unique 1.0 constant; author BETA)",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x0017E948",
+     "original": "lis r0,0x3F80 (1.0)",
+     "patched": "lis r0,0xC000"
+    }
+   ],
+   "data": [],
+   "evidence": "BCUS 0x17EAB0 -> BCES 0x17E948 (-0x168): the only `lis r0,0x3F80` within +-0x3000 (an object initialiser storing 1.0 at +0x2C)",
+   "translation": "immediate 0x3F80 -> 0xC000."
+  },
+  {
+   "id": "if1_brightness_125",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 25,
+   "display_name": "Brightness x1.25",
+   "description": "Picture 25% brighter.",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:1453 (BCUS98119)",
+   "category": "visuals",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [
+    "if1_brightness_150"
+   ],
+   "conflict_group": "if1_brightness",
+   "bundle_members": [],
+   "risk": "low (visual)",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x003444B4",
+     "original": "lis r11,0x3F80 (1.0)",
+     "patched": "lis r11,0x3FA0"
+    }
+   ],
+   "data": [],
+   "evidence": "BCUS 0x344424 -> BCES 0x3444B4 (+0x90): the only `lis r11,0x3F80` within +-0x3000",
+   "translation": "immediate 0x3F80 -> 0x3FA0."
+  },
+  {
+   "id": "if1_brightness_150",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 26,
+   "display_name": "Brightness x1.50",
+   "description": "Picture 50% brighter.",
+   "author": "bungholio (remix by STALKER)",
+   "source": "community mods archive/imported_patch.yml:1464 (BCUS98119)",
+   "category": "visuals",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [
+    "if1_brightness_125"
+   ],
+   "conflict_group": "if1_brightness",
+   "bundle_members": [],
+   "risk": "low (visual)",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x003444B4",
+     "original": "lis r11,0x3F80 (1.0)",
+     "patched": "lis r11,0x3FC0"
+    }
+   ],
+   "data": [],
+   "evidence": "BCUS 0x344424 -> BCES 0x3444B4 (+0x90): the only `lis r11,0x3F80` within +-0x3000",
+   "translation": "immediate 0x3F80 -> 0x3FC0."
+  },
+  {
+   "id": "if1_circular_stick",
+   "games": [
+    "if1"
+   ],
+   "flag_index": 27,
+   "display_name": "Circular stick mapping (2% deadzone)",
+   "description": "Analog sticks get a round range and a small 2% deadzone.",
+   "author": "artofaria",
+   "source": "community mods archive/patch.yml (RPCS3):67478 (BCUS98119) / community mods archive/imported_patch.yml:1070",
+   "category": "fix",
+   "kind": "hook",
+   "requires": [],
+   "conflicts": [],
+   "conflict_group": "",
+   "bundle_members": [],
+   "risk": "medium: replaces the whole calibration (also the menus'); located by signature, not by bytes",
+   "default": false,
+   "sites": [
+    {
+     "addr": "0x001523C0",
+     "original": "the stick calibration function (entry)",
+     "patched": "replaced by a 50-instruction routine"
+    }
+   ],
+   "data": [],
+   "evidence": "BCUS 0x152538 (function start: the patch reads its 9th/10th arguments at 116/124(r1) without a frame) -> BCES 0x1523C0 (-0x178): a function starting right after a blr with the same signature: u8 x/y in r4/r5 (clrlwi), float outputs at r6/r7/r8/r9, byte outputs r10 / arg9 (116(r1)) / arg10 (124(r1)), exactly the stores the patch makes",
+   "translation": "at the function entry, under the flag: the patch's routine in C (single-precision steps as the PPC: x = (u8 r4 - 128)/127, y = (128 - u8 r5)/127, m = sqrtf(fmaf(y,y,x*x)), dz 0.02, t = min((m-0.02)/0.98, 1)), the same stores, r0/r3/r11/r12/f0-f10 and cr7 left as the PPC leaves them, then `return`. The 6 constants are C literals instead of the patch's table at 0x152800."
+  }
+ ],
+ "not_portable": [
+  {
+   "game": "if2",
+   "patch": "Ionic Charges Never Decrease XXX",
+   "author": "bungholio (remix by STALKER)",
+   "reason": "broken in our EBOOT: writes into bss, the ELF header and live code (author: BETA BROKEN CRASH)"
+  },
+  {
+   "game": "if2",
+   "patch": "Amp Meter Always Full XXX",
+   "author": "bungholio (remix by STALKER)",
+   "reason": "broken: a code cave over live code with absolute branches from another build (author: BROKEN CRASH)"
+  },
+  {
+   "game": "if2",
+   "patch": "AMP INFINITE OVERCHARGE XXX",
+   "author": "bungholio (remix by STALKER)",
+   "reason": "broken: 24-word cave over live code at 0x6F5B10 (author: NO EFFECT / CRASH)"
+  },
+  {
+   "game": "if2",
+   "patch": "MOD PACK FLY SUPERMAN INF2 XXX",
+   "author": "bungholio (remix by STALKER)",
+   "reason": "broken: 82-word cave over live code (author: NO EFFECT / CRASH)"
+  },
+  {
+   "game": "fob",
+   "patch": "8 NPEA00322 (EU) entries",
+   "author": "various",
+   "reason": "other FoB build; our NPUA80657 has its own entries (ported above)"
+  },
+  {
+   "game": "if1",
+   "patch": "Black Lightning USA XXX",
+   "author": "bungholio (remix by STALKER)",
+   "reason": "the inFAMOUS 2 patch pasted under the if1 key (if2 addresses 0x2CFA3C/0x75FD00/0xA80104); no if1 equivalent"
+  },
+  {
+   "game": "if1",
+   "patch": "MOD PACK PLUS GIGA XXX",
+   "author": "bungholio (remix by STALKER)",
+   "reason": "42 words incl. 3 caves at BCUS 0x564ED0.. that compare return addresses (0x12808C) and jump back to BCUS absolute addresses; without the BCUS98119 EBOOT the 12 sub-sites cannot be verified one by one"
+  },
+  {
+   "game": "if1",
+   "patch": "MOD PACK FLY SUPERMAN XXX",
+   "author": "bungholio (remix by STALKER)",
+   "reason": "109-word cave over BCUS code with absolute cross-references; cannot be verified without BCUS98119"
+  },
+  {
+   "game": "if1",
+   "patch": "Disable Shadows XXX (BCUS li r3,1000 at 0x257A48)",
+   "author": "bungholio (remix by STALKER) / FlexBy",
+   "reason": "the BCUS shadow patch: no `li r3` site at the shifted address; covered by if1_no_shadows (FlexBy's BCES version); author: BROKEN CRASH"
+  },
+  {
+   "game": "if1",
+   "patch": "Civilians Are Invincible And Can Not Decrease Karma",
+   "author": "bungholio (remix by STALKER)",
+   "reason": "BCUS 0x1F1D14: a nop of one instruction; the BCUS->BCES shift in 0x1Fxxxx is unknown (-0x168 at 0x17E, +0x90 from 0x2D5) and no candidate is unambiguous"
+  },
+  {
+   "game": "if1",
+   "patch": "Objects Never Run Out Of Electricity",
+   "author": "bungholio (remix by STALKER)",
+   "reason": "BCUS 0xD800C nop: no anchor below 0x124000 to fix the shift; author: soft lock in two missions"
+  },
+  {
+   "game": "if1",
+   "patch": "Instantly Absorb All Electricity From Objects",
+   "author": "bungholio (remix by STALKER)",
+   "reason": "BCUS 0xD84CC nop: same, and author: NO EFFECT"
+  },
+  {
+   "game": "if1",
+   "patch": "Skip Intro USA XXX / other-build duplicates (NPUA80480, BCES v1.02, BCUS98119 copies of patches ported above)",
+   "author": "various",
+   "reason": "other builds; the BCES00220 01.00 version is in the catalog"
+  },
+  {
+   "game": "if2",
+   "patch": "Skip Intro for NPEA00318 / BCUS98125 / demo / UGC beta",
+   "author": "FlexBy",
+   "reason": "other inFAMOUS 2 builds"
+  }
+ ],
+ "already_in_port": [
+  {
+   "game": "if1",
+   "patch": "(Experimental) Unstable audio",
+   "author": "Hasster",
+   "note": "already in the port: tools/patch_if1_unstable_audio.py, on by default, PS3_IF1_AUDIO_PATCH=0 turns it off"
+  },
+  {
+   "game": "if1",
+   "patch": "Disable speed limit",
+   "author": "Hasster",
+   "note": "already in the port: game_patches.cpp if1_rpcs3_data, PS3_IF1_RPCS3_DATA=0 turns it off"
+  },
+  {
+   "game": "if1",
+   "patch": "Disable refraction/shifting effect",
+   "author": "Hasster",
+   "note": "already in the port: game_patches.cpp if1_rpcs3_data (PS3_IF1_REFRACTION=1 keeps the effect)"
+  }
+ ]
+}
